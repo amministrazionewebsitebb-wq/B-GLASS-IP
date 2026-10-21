@@ -1,0 +1,11 @@
+.DS_Store
+.build/
+build/
+Pods/
+Podfile.lock
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+App/Info.plist
+BGlass.ipa
+Payload/

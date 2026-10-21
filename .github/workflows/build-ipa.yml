@@ -1,0 +1,55 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      with_vlc:
+        description: "Includi VLC (riproduce anche MKV e MPEG-TS)"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+jobs:
+  checks:
+    name: Core checks
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run the self-checks
+        run: scripts/check.sh
+
+  ipa:
+    name: Unsigned IPA
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tools
+        run: |
+          brew install xcodegen
+          xcodebuild -version
+      - name: Build (VLC first, AVPlayer only as a fallback)
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.with_vlc }}" = "false" ]; then
+            scripts/build_ipa.sh --no-vlc
+          else
+            if ! scripts/build_ipa.sh; then
+              echo "::warning::La build con VLC non è riuscita: ripiego su AVPlayer soltanto (niente MKV / MPEG-TS grezzo)."
+              scripts/build_ipa.sh --no-vlc
+              echo "VLC_FALLBACK=1" >> "$GITHUB_ENV"
+            fi
+          fi
+      - name: Summary
+        run: |
+          {
+            echo "### BGlass.ipa"
+            echo
+            echo "- Dimensione: $(du -h BGlass.ipa | cut -f1)"
+            if [ "${VLC_FALLBACK:-0}" = "1" ]; then echo "- Motore: solo AVPlayer (la build con VLC è fallita)"; else echo "- Motore: AVPlayer + VLC"; fi
+            echo "- Non è firmato: installalo con Sideloadly o AltStore usando il tuo Apple ID."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BGlass-ipa
+          path: BGlass.ipa
+          if-no-files-found: error

@@ -1,0 +1,41 @@
+#!/bin/bash
+# Builds an unsigned BGlass.ipa (to be signed and installed with Sideloadly / AltStore using your own Apple ID).
+#
+#   scripts/build_ipa.sh              with VLC (plays MKV and raw MPEG-TS too)
+#   scripts/build_ipa.sh --no-vlc     AVPlayer only (smaller; HLS and MP4)
+#
+# Needs a Mac with Xcode 15+ and XcodeGen (brew install xcodegen); with VLC also CocoaPods (brew install cocoapods).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VLC=1
+[ "${1:-}" = "--no-vlc" ] && VLC=0
+
+BUILD=build
+rm -rf "$BUILD" Pods Podfile.lock BGlass.xcworkspace
+echo "==> Generating the Xcode project"
+xcodegen generate
+if [ "$VLC" = "1" ]; then
+  echo "==> Installing VLC (CocoaPods)"
+  pod install
+  TARGET=(-workspace BGlass.xcworkspace)
+else
+  TARGET=(-project BGlass.xcodeproj)
+fi
+
+echo "==> Building (Release, no code signing)"
+xcodebuild "${TARGET[@]}" -scheme BGlass -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+  -derivedDataPath "$BUILD" \
+  CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+  build | tail -n 40
+
+APP="$BUILD/Build/Products/Release-iphoneos/BGlass.app"
+[ -d "$APP" ] || { echo "BGlass.app was not produced"; exit 1; }
+
+echo "==> Packaging the IPA"
+rm -rf Payload BGlass.ipa
+mkdir Payload
+cp -R "$APP" Payload/
+zip -qry BGlass.ipa Payload
+rm -rf Payload
+ls -lh BGlass.ipa

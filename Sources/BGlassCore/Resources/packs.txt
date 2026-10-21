@@ -1,0 +1,333 @@
+# BluePlay - pacchetti di canali consigliati.
+# @group id | titolo | descrizione | opzioni (prefer=radio; avoid=radio; any=1 per canali di qualsiasi paese)
+# Riga canale:  Nome visualizzato [= alias 1 | alias 2 ...]    ({1-15} si espande in 1..15)
+# I tag di qualità (HD, FHD, 4K...), i prefissi paese (IT:, |IT|) e le parentesi vengono ignorati nel confronto.
+
+@group intrattenimento | Intrattenimento | Reti generaliste e canali Sky di intrattenimento
+Sky Tg24 HD = Sky TG 24
+Rai 1 HD
+Rai 2 HD
+Rai 3 HD
+Rete 4 HD
+Canale 5 HD
+Italia 1 HD
+La7 HD
+Sky Uno HD = Sky 1
+Sky Uno +1 HD = Sky 1 +1
+Sky Cinema Uno HD
+Sky Atlantic HD
+Sky Serie HD
+Sky Serie +1 HD
+Sky Investigation HD = Sky Collection HD | Sky Crime HD
+Sky Investigation +1 HD = Sky Crime +1 HD | Sky Collection +1 HD
+Crime + Investigation HD = Crime Investigation | Crime and Investigation
+Sky Arte HD
+Sky Arte +1 HD
+Sky Documentaries HD
+Sky Documentaries +1 HD
+Sky Nature HD
+TV8 HD
+Blaze HD
+Comedy Central
+Comedy Central +1
+MTV HD = MTV Italia
+MTV Music
+Gambero Rosso HD
+Classica HD
+NOVE HD = Nove TV
+20 Mediaset HD = Mediaset 20 | Canale 20 | Mediaset Canale 20 | Venti Mediaset
+Cielo HD
+TV 2000 HD = TV2000
+27 Twentyseven HD = Twentyseven | 27 | Mediaset 27 | Canale 27 | Mediaset Twentyseven
+La 5 HD = La5
+Real Time HD = RealTime
+Mediaset Extra HD
+Giallo HD
+Top Crime HD
+DMax Italia HD = DMAX | Dmax HD
+Mediaset Italia 2 HD = Italia 2 | Mediaset Italia Due
+Explorer HD Channel = Explorer | Explorer Channel
+Class Tv Moda = Class TV Moda HD | Class Moda
+
+@group sport | Sport | Sky Sport, DAZN, Eurosport e sport minori
+Sky Sport 24 HD = Sport24 HD | Sky Sport24 | Sky Sport 24
+Sky Sport Uno HD = Sky Sport Summer HD | Sky Sport Uno Summer | Sky Sport 1
+Sky Sport Calcio HD
+Sky Sport Tennis HD
+Sky Sport Arena HD
+Sky Sport Action HD
+Sky Sport Golf HD
+Sky Sport F1 HD = Sky Sport Formula 1 | Sky Sport Formula Uno
+Sky Sport MotoGP HD = Sky Sport Moto GP
+Sky Sport NBA HD
+Sky Sport Info
+Sky Sport HD = Sky Sport
+Eurosport HD = Eurosport 1 | Eurosport 1 HD
+Eurosport 2 HD
+SuperTennis HD = Super Tennis
+ZONA DAZN 1 = DAZN 1 | Zona DAZN 1
+ZONA DAZN 2 = DAZN 2 | Zona DAZN 2
+ZONA DAZN 3 = DAZN 3 | Zona DAZN 3
+ZONA DAZN 4 = DAZN 4 | Zona DAZN 4
+ZONA DAZN 5 = DAZN 5 | Zona DAZN 5
+EQUTv = EQU TV | Equ Tv
+Class Horse TV HD = Class Horse TV
+Bike Channel
+Rai Sport HD = Rai Sport + HD
+ACI Sport TV = ACI Sport
+MS MotorTV = MS Motor TV | Motor TV
+Milan TV
+Inter TV
+Lazio Style Channel
+Caccia & Pesca = Caccia e Pesca
+Pesca & Caccia = Pesca e Caccia
+
+@group cinema | Cinema | Sky Cinema, Primafila e canali di film
+Sky Cinema Uno HD = Sky Cinema 1
+Sky Cinema Due HD = Sky Cinema 2
+Sky Cinema Collection HD
+Sky Cinema Family HD
+Sky Cinema Action HD
+Sky Cinema Suspense HD
+Sky Cinema Romance HD
+Sky Cinema Drama HD
+Sky Cinema Comedy HD
+Sky Cinema Uno +24 HD = Sky Cinema 1 +24
+Sky Cinema Due +24 HD = Sky Cinema 2 +24
+Sky Cinema 4K = Sky Cinema UHD
+Iris HD
+Cine34 HD = Cine 34
+Vetrina Primafila = Primafila Vetrina
+Primafila {1-15} HD = Primafila Premium {1-15} | Premium Primafila {1-15}
+
+@group documentari | Documentari e Lifestyle | Natura, storia, cucina, arte e viaggi
+Sky Arte HD
+Sky Arte +1 HD
+Sky Documentaries HD
+Sky Documentaries +1 HD
+Sky Nature HD
+Discovery Channel HD = Discovery HD | Discovery
+Discovery +1 = Discovery Channel +1
+History Channel HD = History HD | History
+History +1 = History Channel +1
+Discovery Sci HD = Discovery Science | Discovery Science HD | Sci
+Crime + Investigation HD = Crime Investigation | Crime and Investigation
+Gambero Rosso HD
+Focus HD
+Food Network HD
+HGTV HD = HGTV Home and Garden | Home Garden HGTV | Home & Garden HGTV
+Motor Trend HD
+QVC HD
+GM24 HD = GM 24
+Fashion TV = Fashion TV HD
+
+@group news_it | News Italia | Telegiornali, meteo, economia e canali istituzionali
+Sky TG24 HD = Sky TG 24
+TG24 PrimoPiano = TG24 Primo Piano | Sky TG24 Primo Piano
+Sky Meteo24 = Sky Meteo 24
+Class CNBC
+Rai News 24 = Rai News
+Tgcom24 = TGCom 24
+Tg Norba 24
+BFC
+Pop News
+The Map Report TV = Map Report TV
+Vaticana Media Europa HD = Vatican Media | Vaticana Media
+Emilia Romagna 24 = TR24 | TR 24 Emilia Romagna
+TRM h24 = TRM
+SMtv San Marino = SMTV | San Marino RTV
+Euronews = Euronews Italiano | Euronews Italia
+Sky News
+Fox News
+Camera dei Deputati = Camera Deputati | Camera TV
+Senato Italiano = Senato | Senato TV
+
+@group news_int | News Internazionali | CNN, BBC, Al Jazeera e altri notiziari esteri | any=1
+CNN International = CNN Int | CNN
+Fox Business
+CNBC Europe HD = CNBC Europe | CNBC
+Bloomberg TV = Bloomberg | Bloomberg Television
+BBC World News = BBC World
+France 24 English HD = France 24 English | France 24 Eng
+Al Jazeera Int. HD = Al Jazeera English | Al Jazeera International | Al Jazeera Int
+NHK World HD = NHK World | NHK World Japan
+Arirang TV = Arirang
+CCTV News = CCTV 13 | CGTN
+i24news HD = i24 News | i24news English
+Euronews Eng HD = Euronews English | Euronews Eng
+Euronews Russian = Euronews Russia
+France 24 Français HD = France 24 Francais | France 24 French
+Deutsche Welle English HD = DW English | Deutsche Welle English | DW
+TVP Polonia
+TV Romania Int = TVR International | TVR Int
+Al Jazeera HD = Al Jazeera Arabic | Al Jazeera
+Al Arabiya HD = Al Arabiya
+BBC Arabic HD = BBC Arabic
+Sky News Arabia
+TRT Turk World HD = TRT Turk | TRT World
+2M Monde = 2M
+Medi 1 Sat TV Afrique = Medi1 TV Afrique | Medi 1 TV
+TRT Arabi HD = TRT Arabi
+ESC - Al Masriyah = Al Masriyah | ESC Al Masriyah
+Tunis 7 = Tunisie 7 | Watania 1
+Canal Algerie
+Record TV Europa = Record Europa
+Vesti = Vesti TV | Rossiya 24
+RTR Planeta = RTR Planet
+Channel 1 Russia = Channel One Russia | Pervyj Kanal
+RT Documentary HD = RT Documentary | RTD
+CCTV - 4 = CCTV 4
+Justice TV
+
+@group bambini | Bambini | Cartoni, Nick, Boomerang e canali per i più piccoli
+Dea Kids
+Dea Kids +1
+Nick Jr. = Nick Jr | Nickelodeon Junior
+Nick Jr. +1 = Nick Jr +1
+Nickelodeon
+Nickelodeon +1
+Cartoon Network HD = Cartoon Network
+Cartoon Network +1
+Boomerang
+Boomerang +1
+Dea Junior
+Baby TV
+Super! = Super
+K2
+Frisbee
+Nickelodeon Ukraine Pluto TV
+
+@group musica | Musica | MTV, Deejay TV e radio con video | avoid=radio
+MTV Music
+Deejay TV
+VH1 HD = VH1
+Radio Monte Carlo = RMC TV | Radio Montecarlo TV
+Virgin Radio TV
+RDS Social TV HD = RDS Social TV | RDS TV
+Radio Italia TV HD = Radio Italia TV | Radio Italia Tv
+Radio Italia Trend TV HD = Radio Italia Trend TV
+Radio Kiss Kiss TV HD = Radio Kiss Kiss TV | Kiss Kiss TV
+Radionorba TV HD = Radionorba TV | Radio Norba TV
+Radio Zeta HD = Radio Zeta TV
+RTL 102.5 HD = RTL 102.5 TV | RTL 1025
+RTL 102.5 News HD = RTL 102.5 News
+Radiofreccia HD = Radiofreccia TV | Radio Freccia
+
+@group radio | Radio | Stazioni radio italiane e straniere (solo audio) | prefer=radio
+Radio Deejay
+Radio Capital
+M2O = M2o Radio
+Radio Montecarlo = Radio Monte Carlo | RMC
+Radio 105 = 105
+Virgin Radio
+RDS = RDS 100% Grandi Successi
+Radio Italia = Radio Italia Solo Musica Italiana
+Radio KissKiss = Radio Kiss Kiss
+R 101 = R101 | Radio 101
+Radio 24
+RTL 102.5 = RTL 1025
+Radiofreccia = Radio Freccia
+Radio Zeta
+Inblu2000 = InBlu 2000
+Inblu = InBlu Radio
+Radio Vaticana
+Rai Radio 1 = Radio Rai 1 | Rai Radio Uno
+Rai Radio 2 = Radio Rai 2 | Rai Radio Due
+Rai Radio 3 = Radio Rai 3 | Rai Radio Tre
+Rai Radio 1 Sport
+Rai Radio Classica
+Rai Radio Tutta Italiana
+Rai Radio 2 Indie
+Rai GR Parlamento
+Rai Radio Kids
+Rai Radio Live
+Rai Isoradio
+Rai Radio Techete = Rai Radio Tecnete
+Radio Margherita
+Radio San Marino
+Radio Italia Anni '60 = Radio Italia Anni 60
+Radio Maria
+Radio Radicale
+Radio Sportiva
+Radio Vaticana Europa
+Dimensione Suono Roma
+Dimensione Suono Soft
+Discoradio
+RMC Sport
+RMC2 = RMC 2
+Radio Sintony
+Radio Super Sound
+Radio Gamma Stereo
+Radio Iglesias
+Radio Number One
+Radio Onda d'Urto = Radio Onda Durto
+Radio Dimensione Stereo
+Radio Padre Pio
+Radio Popolare
+Radio Radio
+BBC English (Europe) = BBC World Service | BBC Radio
+RFI Francais = RFI
+RSI Rete 1 = Rete Uno RSI
+RSI Rete 2 = Rete Due RSI
+RSI Rete 3 = Rete Tre RSI
+Radio Swiss Classic
+Radio Swiss Jazz
+Radio Swiss Pop
+
+@group altri | Cultura e altri canali | Rai Storia, canali locali, religiosi, shopping e altro
+Rai Storia
+Rai Scuola
+Rai Gulp
+TV Yes
+Paci Contemporary Channel
+Well TV
+Italian Fishing TV
+Uninettuno University TV = Uninettuno
+NTN
+MS Channel
+Wine TV
+Videolina = Videolina Sardegna
+La C Sat = LaC Sat | La C
+Canale Italia
+Lazio TV Latina
+Gold TV
+Telecupole
+People TV - Rete 7 = People TV | Rete 7
+Radio Radio TV
+TVA Vicenza
+Veneto Link
+SBN International
+Daystar TV = Daystar
+Padre Pio TV
+The Word Network
+Parole di Vita
+EWTN UK & Ireland = EWTN
+TCI
+Sender Neu Jerusalem
+Canale Italia 2
+TV Art Live
+Arte Atelier
+Juwelo TV = Juwelo
+TLC Telecampione
+Arte Investimenti
+ProntoGold
+Aurora Arte
+Antichita Chiossone
+Subacquea TV
+La9 = La 9
+Venus TV
+Conto TV
+Test
+Teleitalia
+Music Life
+Eurosat
+Ciao
+La8 = La 8
+All in Channel
+Italia Channel
+Canale Italia 83
+Napoli Mia
+Lazio Channel
+Canale Italia 84
+.Blu = Blu TV
+Fuego TV
