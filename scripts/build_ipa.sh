@@ -11,13 +11,22 @@ cd "$(dirname "$0")/.."
 VLC=1
 [ "${1:-}" = "--no-vlc" ] && VLC=0
 
+# XcodeGen and CocoaPods write the newest project format (77, Xcode 16); Xcode 15 refuses to open it. Nothing here needs it.
+downgrade_format() {
+  for f in BGlass.xcodeproj/project.pbxproj Pods/Pods.xcodeproj/project.pbxproj; do
+    if [ -f "$f" ]; then sed -i '' 's/objectVersion = 77;/objectVersion = 56;/' "$f"; fi
+  done
+}
+
 BUILD=build
 rm -rf "$BUILD" Pods Podfile.lock BGlass.xcworkspace
 echo "==> Generating the Xcode project"
 xcodegen generate
+downgrade_format
 if [ "$VLC" = "1" ]; then
   echo "==> Installing VLC (CocoaPods)"
   pod install
+  downgrade_format
   TARGET=(-workspace BGlass.xcworkspace)
 else
   TARGET=(-project BGlass.xcodeproj)
