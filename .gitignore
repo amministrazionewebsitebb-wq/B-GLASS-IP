@@ -9,3 +9,4 @@ DerivedData/
 App/Info.plist
 BGlass.ipa
 Payload/
+xcodebuild.log

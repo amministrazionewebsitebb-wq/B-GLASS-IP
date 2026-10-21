@@ -33,10 +33,21 @@ else
 fi
 
 echo "==> Building (Release, no code signing)"
+set +e
 xcodebuild "${TARGET[@]}" -scheme BGlass -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
   -derivedDataPath "$BUILD" \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-  build | tail -n 40
+  build > xcodebuild.log 2>&1
+STATUS=$?
+set -e
+tail -n 25 xcodebuild.log
+if [ "$STATUS" -ne 0 ]; then
+  echo
+  echo "==================== ERRORI DI COMPILAZIONE ===================="
+  grep -E "error:|fatal error" xcodebuild.log | sort -u | head -60
+  echo "================================================================"
+  exit "$STATUS"
+fi
 
 APP="$BUILD/Build/Products/Release-iphoneos/BGlass.app"
 [ -d "$APP" ] || { echo "BGlass.app was not produced"; exit 1; }
