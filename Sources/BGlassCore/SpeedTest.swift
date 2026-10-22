@@ -115,9 +115,8 @@ public final class SpeedTest {
 
     private func sampleURL(for s: Source, backend: Backend) -> String? {
         guard let it = backend.lib.snap.items.first(where: { $0.src == s.id && $0.kind == .movie }) else { return nil }
-        if let u = it.url { return u }
-        guard s.type == .xtream, let sid = it.sid else { return nil }
-        return XtreamClient(s).movieUrl(sid, ext: it.ext)
+        if s.type == .xtream, let sid = it.sid { return XtreamClient(s).movieUrl(sid, ext: it.ext) }
+        return it.url.map { M3UParser.address($0) }
     }
 
     // MARK: measuring

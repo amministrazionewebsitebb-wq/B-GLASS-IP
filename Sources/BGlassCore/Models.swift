@@ -100,6 +100,7 @@ public struct Source: Codable, Equatable, Identifiable, Sendable {
     public var maxConn = ""
     public var expTs: Int64 = 0      // account expiry, epoch seconds (0 = unknown / unlimited)
     public var activeConn = ""
+    public var streamBase = ""       // xtream: where the panel says its videos are (server_info), when it is another address
 
     public init() {}
 
@@ -113,7 +114,7 @@ public struct Source: Codable, Equatable, Identifiable, Sendable {
         fmtVer = c.value(.fmtVer, 2); updated = c.value(.updated, 0)
         nLive = c.value(.nLive, 0); nMovies = c.value(.nMovies, 0); nSeries = c.value(.nSeries, 0)
         status = c.value(.status, ""); expires = c.value(.expires, ""); maxConn = c.value(.maxConn, "")
-        expTs = c.value(.expTs, 0); activeConn = c.value(.activeConn, "")
+        expTs = c.value(.expTs, 0); activeConn = c.value(.activeConn, ""); streamBase = c.value(.streamBase, "")
     }
 }
 

@@ -85,6 +85,9 @@ public final class PlayerModel: ObservableObject {
     private var baseKey = ""
     private var playingKey = ""
     private var langApplied = false
+    /// Whether the server of the current video was asked why it does not start, and what it said.
+    private var asked = false
+    private var lastCheck: StreamCheck?
     private var lastTickPos: Int64 = -1
     private var frozenSince: Date?
 
@@ -239,6 +242,8 @@ public final class PlayerModel: ObservableObject {
         if base == nil { forceVLC = false; forceAV = false }      // a new channel gets the preferred engine again
         generation += 1
         let gen = generation
+        asked = false
+        lastCheck = nil
         retryTask?.cancel()
         attempts = 0
         notice = nil
@@ -365,6 +370,8 @@ public final class PlayerModel: ObservableObject {
         resumeFloor = resume
         generation += 1
         let gen = generation
+        asked = false
+        lastCheck = nil
         Task { [weak self] in
             guard let self = self else { return }
             guard let p = await self.app.backend.resolve(it) else { self.phase = .failed("Impossibile ricavare l'indirizzo del film"); return }
@@ -393,6 +400,8 @@ public final class PlayerModel: ObservableObject {
         upNextTask?.cancel()
         generation += 1
         let gen = generation
+        asked = false
+        lastCheck = nil
         Task { [weak self] in
             guard let self = self else { return }
             guard let p = self.app.backend.resolveEpisode(ep, seriesKey: sk) else { self.phase = .failed("Episodio non trovato"); return }
@@ -500,33 +509,63 @@ public final class PlayerModel: ObservableObject {
         guard let p = play else { phase = .failed(msg); return }
         attempts += 1
         playingSince = nil
+        // The first time a video does not start, its server is asked why. A refusal of the provider is told at once: no player can do
+        // better, and hammering a one-connection line only makes it worse. Anything else goes on to the other players and forms.
+        if !asked {
+            asked = true
+            let url = currentURL(p)
+            notice = "Controllo il canale…"
+            retryTask?.cancel()
+            let gen = generation
+            retryTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 1_200_000_000)           // the refused connection has time to close
+                guard let self = self, !Task.isCancelled, gen == self.generation else { return }
+                let c = await self.app.backend.checkStream(p, url: url)
+                guard !Task.isCancelled, gen == self.generation else { return }
+                self.lastCheck = c
+                if c.final { self.giveUp(c.message) } else { self.recover(p, msg) }
+            }
+            return
+        }
+        recover(p, msg)
+    }
+
+    private func giveUp(_ msg: String) {
+        retryTask?.cancel()
+        notice = nil
+        if let c = lastCheck, c.verdict != .ok, !c.message.isEmpty { phase = .failed(c.message) } else { phase = .failed(msg) }
+    }
+
+    private func recover(_ p: Play, _ msg: String) {
+        let busy = lastCheck?.verdict == .busy                                // a connection still counted by the provider: give it time
         if isLive {
-            // Each form of the address with one player, then with the other; then the next form (other format, old style address).
-            // Providers differ: whatever plays first wins, and is remembered for the other channels of the same list.
-            if attempts > 2 * (p.alts.count + 1) + 1 { phase = .failed(msg); notice = nil; return }
+            // Each form of the address with one player, then with the other; then the next form (other format, old style address,
+            // the address the panel gives for its videos). Whatever plays first wins, and is remembered for the list.
+            if attempts > 2 * (p.alts.count + 1) + 1 { giveUp(msg); return }
             let cur = URL(string: currentURL(p))
             let needsVLC = cur.map { Engines.needsVLC($0, live: true) } ?? false
-            let canToggle = Engines.vlcAvailable && app.setting("engine", "auto") == "auto" && (engineId == "av" || !needsVLC)
+            let pointless = attempts == 1 && (lastCheck?.verdict == .missing || lastCheck?.verdict == .notVideo)   // the address itself is wrong
+            let canToggle = !pointless && Engines.vlcAvailable && app.setting("engine", "auto") == "auto" && (engineId == "av" || !needsVLC)
             if attempts % 2 == 1 && canToggle {
                 if engineId == "av" { forceVLC = true; forceAV = false } else { forceAV = true; forceVLC = false }
                 notice = "Riconnessione… (\(attempts))"
-                reload(after: 0.8, url: currentURL(p))
+                reload(after: busy ? 6 : 1.2, url: currentURL(p))
             } else if !p.alts.isEmpty {
                 forceVLC = false; forceAV = false
                 urlIndex = (urlIndex + 1) % (p.alts.count + 1)
                 notice = "Provo un altro formato del canale…"
-                reload(after: 0.6, url: currentURL(p))
+                reload(after: busy ? 6 : 1.5, url: currentURL(p))
             } else {
                 notice = "Riconnessione… (\(attempts))"
-                reload(after: min(5, Double(attempts) * 1.5), url: currentURL(p))
+                reload(after: busy ? 6 : min(5, Double(attempts) * 1.5), url: currentURL(p))
             }
         } else {
-            if attempts > 3 { phase = .failed(msg); notice = nil; return }
+            if attempts > 3 { giveUp(msg); return }
             if Engines.vlcAvailable {
                 if engineId == "av" { forceVLC = true; forceAV = false } else if attempts == 2 { forceAV = true; forceVLC = false }
             }
             notice = "Riprovo da dove eri arrivato…"
-            reload(after: Double(attempts), url: nil)
+            reload(after: busy ? 6 : Double(attempts), url: nil)
         }
     }
 
@@ -542,6 +581,8 @@ public final class PlayerModel: ObservableObject {
 
     public func retry() {
         attempts = 0
+        asked = false
+        lastCheck = nil
         guard let p = play else { return }
         notice = nil
         load(p, url: currentURL(p), at: isLive ? 0 : max(positionMs, startAt))

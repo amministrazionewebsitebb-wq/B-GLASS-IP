@@ -15,6 +15,67 @@ public enum BackendError: Error, LocalizedError {
 /// (phase, done, total): "auth", "live", "movies", "series", "part" (kind in total), "m3u" (total = percent, -1 unknown), "index", "save", "epg".
 public typealias ProgressFn = (_ phase: String, _ done: Int, _ total: Int) -> Void
 
+/// The answer of a video server, sorted by what can be done about it.
+public struct StreamCheck: Sendable {
+    public enum Verdict: Sendable { case ok, refused, busy, missing, serverError, unreachable, notVideo }
+    public var verdict = Verdict.ok
+    public var http = 0
+    public var message = ""
+    /// Nothing the app can do: another player or form of the address would be refused the same way.
+    public var final: Bool { verdict == .refused || verdict == .unreachable }
+
+    public init() {}
+
+    mutating func classify(head: Data) {
+        let c = http
+        switch c {
+        case 200...299:
+            if Lenient.isHTML(head) { verdict = .notVideo; message = "Il server non manda un video: risponde con una pagina web." }
+            else if head.isEmpty { verdict = .notVideo; message = "Il server apre il collegamento ma non manda il video." }
+            else { verdict = .ok }
+        case 429, 458, 459, 460, 509:
+            verdict = .busy
+            message = "Il fornitore rifiuta il video: troppe connessioni (\(c)). L'account è già in uso su un altro dispositivo."
+        case 401, 403:
+            verdict = .refused
+            message = "Il fornitore rifiuta il video (errore \(c)). L'abbonamento risponde ma non consente la visione da questa connessione: la linea può essere legata a un'altra rete o dispositivo, oppure il fornitore ammette solo la sua app. Nessun lettore può aggirarlo: chiedi al fornitore di sbloccarla."
+        case 404, 410:
+            verdict = .missing
+            message = "Il fornitore non ha questo contenuto (\(c)): può averlo tolto o spostato. Aggiorna la lista."
+        case 500...599:
+            verdict = .serverError
+            message = "Il server del fornitore è in errore (\(c)): riprova tra poco."
+        default:
+            verdict = .refused
+            message = "Il fornitore rifiuta il video (errore \(c))."
+        }
+    }
+
+    mutating func classify(error: Error) {
+        guard let u = error as? URLError else { verdict = .ok; return }
+        switch u.code {
+        case .cannotFindHost, .dnsLookupFailed:
+            verdict = .unreachable
+            message = "Il nome del server dei video non viene trovato dalla tua rete (DNS): il server non esiste più, oppure il tuo operatore lo blocca. Prova con un'altra rete o un DNS diverso (ad esempio l'app 1.1.1.1)."
+        case .cannotConnectToHost:
+            verdict = .unreachable
+            message = "Il server dei video non accetta la connessione dalla tua rete: è spento o irraggiungibile da qui."
+        case .timedOut:
+            verdict = .serverError
+            message = "Il server dei video non risponde (tempo scaduto)."
+        case .networkConnectionLost, .badServerResponse, .zeroByteResource:
+            verdict = .refused
+            message = "Il server dei video chiude subito la connessione: di solito blocca questa rete o questo tipo di lettore."
+        case .notConnectedToInternet:
+            verdict = .unreachable
+            message = "Nessuna connessione a Internet."
+        default:
+            if XtreamClient.certificateProblem(u) { verdict = .unreachable; message = "Il collegamento sicuro (HTTPS) con il server dei video non riesce: certificato non valido." }
+            else { verdict = .ok }
+        }
+    }
+}
+
 public struct Play: Sendable {
     public var url = ""
     public var ua = ""
@@ -218,6 +279,7 @@ public final class Backend {
         lib.mutateSource(id) {
             $0.url = way.url; $0.ua = way.ua; $0.insecure = way.insecure
             $0.expires = acc.expires; $0.expTs = acc.expTs; $0.activeConn = acc.activeConn; $0.maxConn = acc.maxConn; $0.hls = acc.hls; $0.fmtChecked = true
+            $0.streamBase = acc.streamBase
         }
         let x = XtreamClient(lib.source(id) ?? way)
         let before = lib.source(id) ?? s
@@ -573,6 +635,29 @@ public final class Backend {
         }
     }
 
+    /// What the server of a video answers, in words a viewer can act on. Asked when the player could not start it, so the app can
+    /// tell "the provider refuses this line" (no player could do better) from "the player could not read it" (try another one).
+    public func checkStream(_ p: Play, url: String) async -> StreamCheck {
+        var c = StreamCheck()
+        guard let u = URL(string: url), u.scheme?.hasPrefix("http") == true else { c.verdict = .ok; return c }
+        var r = URLRequest(url: u, timeoutInterval: 10)
+        r.setValue(p.ua.isEmpty ? Net.defaultUA : p.ua, forHTTPHeaderField: "User-Agent")
+        for (k, v) in p.headers { r.setValue(v, forHTTPHeaderField: k) }
+        do {
+            let (bytes, resp) = try await Net.session(insecure: p.insecure).bytes(for: r)
+            c.http = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            var head = Data()
+            if (200...299).contains(c.http) {
+                for try await b in bytes { head.append(b); if head.count >= 512 { break } }
+            }
+            c.classify(head: head)
+        } catch {
+            c.classify(error: error)
+        }
+        Diag.log("Controllo del video \(Net.brief(url)): \(c.http > 0 ? "HTTP \(c.http)" : "nessuna risposta") → \(c.verdict)")
+        return c
+    }
+
     /// True when the data is a single HLS stream (a channel), not an IPTV list.
     static func isStreamPlaylist(_ d: Data) -> Bool {
         let t = Lenient.text(d.prefix(8192))
@@ -584,7 +669,7 @@ public final class Backend {
         var p = Play()
         if let s = s { p.ua = s.ua; p.insecure = s.insecure; Diag.secret(s.user, s.pass) }
         if let u = it.ua, !u.isEmpty { p.ua = u }
-        if let line = it.url {
+        if let line = it.url, !(s?.type == .xtream && it.sid != nil) {
             // Kodi-style headers after "|" belong to the request, not to the address
             let direct = M3UParser.address(line)
             var h = M3UParser.headers(line)
@@ -611,10 +696,15 @@ public final class Backend {
             p.url = x.liveUrl(sid)
             // the other format of the same channel (many panels serve both even when they declare one), then the old style address
             p.alts = [x.liveUrl(sid, fmt: p.url.hasSuffix(".m3u8") ? "ts" : "m3u8"), x.plainLiveUrl(sid)]
+            if !s.streamBase.isEmpty {                        // the address the panel itself gives for its videos
+                var t = s; t.url = s.streamBase
+                p.alts.append(XtreamClient(t).liveUrl(sid))
+            }
         case .movie: p.url = x.movieUrl(sid, ext: it.ext)
         case .episode: p.url = x.episodeUrl(sid, ext: it.ext)
         case .series: return nil
         }
+        if let direct = it.url, direct != p.url { p.alts.append(M3UParser.address(direct)) }      // the panel's "direct_source"
         return p
     }
 }

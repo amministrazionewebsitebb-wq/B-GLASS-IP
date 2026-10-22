@@ -13,6 +13,8 @@ public final class XtreamClient {
         public var hls = false
         /// The panel answered and said no (wrong user or password, expired, banned): looking elsewhere will not help.
         public var rejected = false
+        /// Where the panel says its videos are served ("server_info"), when that is another address than the one logged into.
+        public var streamBase = ""
     }
 
     /// A login that worked, and the way it worked.
@@ -171,6 +173,19 @@ public final class XtreamClient {
         a.status = XtreamClient.str(ui["status"])
         a.maxConn = XtreamClient.str(ui["max_connections"])
         a.activeConn = XtreamClient.str(ui["active_cons"])
+        if let si = o["server_info"] as? [String: Any] {
+            var host = XtreamClient.str(si["url"]).trimmed
+            if let r = host.range(of: "://") { host = String(host[r.upperBound...]) }
+            while host.hasSuffix("/") { host.removeLast() }
+            let proto = XtreamClient.str(si["server_protocol"]).lowercased() == "https" ? "https" : "http"
+            let port = XtreamClient.str(proto == "https" ? si["https_port"] : si["port"]).trimmed
+            if !host.isEmpty, !host.contains("/"), !host.contains(" ") {
+                let sb = XtreamClient.normalizeBase("\(proto)://\(host)" + (port.allDigits() && !port.isEmpty ? ":\(port)" : ""))
+                let mine = URLComponents(string: base), theirs = URLComponents(string: sb)
+                let samePlace = mine?.host?.lowercased() == theirs?.host?.lowercased() && (mine?.port ?? 80) == (theirs?.port ?? 80)
+                if !samePlace { a.streamBase = sb }
+            }
+        }
         let exp = XtreamClient.str(ui["exp_date"])
         if exp.count >= 6 && exp.allDigits(), let ts = Int64(exp) {
             a.expTs = ts
@@ -298,7 +313,7 @@ public final class XtreamClient {
         let cats = await categories("get_live_categories")
         var n = 0
         let src = s.id
-        try await stream(api("get_live_streams"), keys: ["stream_id", "name", "category_id", "stream_icon", "epg_channel_id", "num"]) { f in
+        try await stream(api("get_live_streams"), keys: ["stream_id", "name", "category_id", "stream_icon", "epg_channel_id", "num", "direct_source"]) { f in
             guard let sid = f["stream_id"] else { return }
             let name = XtreamClient.nz(f["name"])
             if Hash.isSeparator(name) { return }                                   // list headers, not channels
@@ -307,6 +322,7 @@ public final class XtreamClient {
             it.logo = XtreamClient.emptyNil(f["stream_icon"])
             it.epgId = XtreamClient.nz(f["epg_channel_id"])
             it.num = XtreamClient.int(f["num"])
+            XtreamClient.keepDirect(it, f["direct_source"])
             sink(it)
             n += 1
             if n % 4000 == 0 { progress?(n) }
@@ -319,7 +335,7 @@ public final class XtreamClient {
         let cats = await categories("get_vod_categories")
         var n = 0
         let src = s.id
-        try await stream(api("get_vod_streams"), keys: ["stream_id", "name", "category_id", "stream_icon", "container_extension", "added", "rating"]) { f in
+        try await stream(api("get_vod_streams"), keys: ["stream_id", "name", "category_id", "stream_icon", "container_extension", "added", "rating", "direct_source"]) { f in
             guard let sid = f["stream_id"] else { return }
             let name = XtreamClient.nz(f["name"])
             if Hash.isSeparator(name) { return }                                   // "---- Vetrina ----" banners are not films
@@ -327,6 +343,7 @@ public final class XtreamClient {
             it.sid = sid
             it.logo = XtreamClient.emptyNil(f["stream_icon"])
             it.ext = XtreamClient.nz(f["container_extension"])
+            XtreamClient.keepDirect(it, f["direct_source"])
             it.added = XtreamClient.int(f["added"])
             let rating = f["rating"]
             it.extra = rating == nil || rating == "0" ? "" : rating
@@ -359,6 +376,12 @@ public final class XtreamClient {
             if n % 4000 == 0 { progress?(n) }
         }
         return n
+    }
+
+    /// "direct_source": the original address of the stream, which some panels fill in. Kept as one more way to play it.
+    static func keepDirect(_ it: Item, _ v: String?) {
+        let d = (v ?? "").trimmed
+        if d.lowercased().hasPrefix("http") || d.lowercased().hasPrefix("rtmp") { it.setUrl(d, prefixes: nil) }
     }
 
     // MARK: details

@@ -62,7 +62,7 @@ public enum Net {
     private static var looseSession: URLSession?
 
     /// One URLSession per TLS mode, for small requests.
-    static func session(insecure: Bool) -> URLSession {
+    public static func session(insecure: Bool) -> URLSession {
         lock.lock(); defer { lock.unlock() }
         if insecure {
             if looseSession == nil { looseSession = URLSession(configuration: configuration(), delegate: TrustAll(), delegateQueue: nil) }

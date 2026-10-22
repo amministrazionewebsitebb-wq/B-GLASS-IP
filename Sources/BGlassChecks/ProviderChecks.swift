@@ -89,7 +89,7 @@ func runProviderChecks(_ h: Harness) async {
         guard path == "/player_api.php" else { return TestServer.Response("x", status: 404) }
         if q["password"] != "p" { return TestServer.Response("{\"user_info\":{\"auth\":0}}") }
         switch q["action"] ?? "" {
-        case "": return TestServer.Response("<br />\n<b>Notice</b>: Undefined index<br />\n{\"user_info\":{\"auth\":1,\"status\":\"Active\",\"exp_date\":null,\"allowed_output_formats\":[]},\"server_info\":{}}")
+        case "": return TestServer.Response("<br />\n<b>Notice</b>: Undefined index<br />\n{\"user_info\":{\"auth\":1,\"status\":\"Active\",\"exp_date\":null,\"allowed_output_formats\":[]},\"server_info\":{\"url\":\"videos.example\",\"port\":\"8080\",\"https_port\":\"25463\",\"server_protocol\":\"http\"}}")
         case "get_live_categories": return TestServer.Response(latin1("[{\"category_id\":1,\"category_name\":\"Calcio è\"}]"))
         case "get_live_streams":
             if box.emptyLive { return TestServer.Response("[]") }
@@ -122,6 +122,17 @@ func runProviderChecks(_ h: Harness) async {
             h.equal(play?.url ?? "", "\(picky.base)/live/u/p/1.ts", "no HLS declared: MPEG-TS first")
             h.equal(play?.alt ?? "", "\(picky.base)/live/u/p/1.m3u8", "and HLS as the second try")
             h.equal(play?.ua ?? "", "IPTVSmartersPlayer", "the player asks the same way")
+            h.equal(play?.alts.last ?? "", "http://videos.example:8080/live/u/p/1.ts", "the video address the panel declares is tried too")
+
+            // why a video does not start: asked to its server
+            var refused = play!; refused.ua = "SomethingElse"
+            let r = await b.checkStream(refused, url: play!.url)
+            h.equal(r.http, 403)
+            h.check(r.verdict == .refused && r.final && r.message.contains("rifiuta"), r.message)
+            let m = await b.checkStream(play!, url: picky.base + "/nothing.ts")
+            h.check(m.verdict == .missing && !m.final, "\(m.verdict)")
+            let gone = await b.checkStream(play!, url: "http://127.0.0.1:9/x.ts")
+            h.check(gone.verdict == .unreachable && gone.final, "\(gone.verdict)")
         }
 
         // the panel has a bad moment and sends an empty channel list: the channels stay

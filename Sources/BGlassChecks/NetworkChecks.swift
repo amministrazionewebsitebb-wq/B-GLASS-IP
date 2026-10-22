@@ -62,7 +62,7 @@ private func startPanel(_ p: @escaping () -> Panel) throws -> TestServer {
                 return json("{\"user_info\":{\"auth\":1,\"status\":\"Active\",\"exp_date\":\"1893456000\",\"max_connections\":\"2\",\"active_cons\":\"0\",\"allowed_output_formats\":[\"m3u8\",\"ts\"]},\"server_info\":{}}")
             case "get_live_categories": return json("[{\"category_id\":\"1\",\"category_name\":\"IT | Generali\"},{\"category_id\":\"2\",\"category_name\":\"IT | Sport\"},{\"category_id\":\"3\",\"category_name\":\"UK | Sport\"},{\"category_id\":\"4\",\"category_name\":\"XXX Live\"}]")
             case "get_live_streams":
-                return json("[" + p.live.map { "{\"num\":\($0.id - 100),\"name\":\"\(esc($0.name))\",\"stream_id\":\($0.id),\"category_id\":\"\($0.cat)\",\"stream_icon\":\"http://img/\($0.id).png\",\"epg_channel_id\":\"\($0.epg)\"}" }.joined(separator: ",") + "]")
+                return json("[" + p.live.map { "{\"num\":\($0.id - 100),\"name\":\"\(esc($0.name))\",\"stream_id\":\($0.id),\"category_id\":\"\($0.cat)\",\"stream_icon\":\"http://img/\($0.id).png\",\"epg_channel_id\":\"\($0.epg)\",\"direct_source\":\"\($0.id == 103 ? "http://origin.example/rai2.m3u8" : "")\"}" }.joined(separator: ",") + "]")
             case "get_vod_categories": return json("[{\"category_id\":\"10\",\"category_name\":\"Azione\"},{\"category_id\":\"11\",\"category_name\":\"Commedia\"},{\"category_id\":\"12\",\"category_name\":\"Film più visti\"}]")
             case "get_vod_streams": return json(vod)
             case "get_series_categories": return json("[{\"category_id\":\"20\",\"category_name\":\"Serie TV\"}]")
@@ -241,6 +241,9 @@ func runNetworkChecks(_ h: Harness) async {
         let play = await b.resolve(rai)
         h.equal(play?.url ?? "", "\(server.base)/live/u/p/101.m3u8")
         h.equal(play?.alt ?? "", "\(server.base)/live/u/p/101.ts")
+        let rai2 = await b.resolve(sn.byKey["\(s.id):l:103"]!)
+        h.equal(rai2?.url ?? "", "\(server.base)/live/u/p/103.m3u8", "the panel address stays the first choice")
+        h.equal(rai2?.alts.last ?? "", "http://origin.example/rai2.m3u8", "the direct source is one more way")
         let movie = await b.resolve(sn.byKey["\(s.id):m:501"]!)
         h.equal(movie?.url ?? "", "\(server.base)/movie/u/p/501.mkv")
 

@@ -330,7 +330,8 @@ public struct PlayerView: View {
     private func errorCard(_ msg: String, compact: Bool) -> some View {
         VStack(spacing: compact ? 8 : 12) {
             Text(model.isLive ? "Il canale non si apre" : "Il video non parte").font(.system(size: compact ? 16 : 19, weight: .bold))
-            Text(msg).font(.system(size: 12)).foregroundStyle(Theme.secondaryText).multilineTextAlignment(.center).lineLimit(compact ? 2 : 4)
+            Text(msg).font(.system(size: compact ? 11 : 13)).foregroundStyle(Theme.secondaryText).multilineTextAlignment(.center).lineLimit(compact ? 5 : 6)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 10) {
                 Button("Riprova") { model.retry() }.buttonStyle(GlassButtonStyle(prominent: true))
                 if model.canSwitchEngine { Button(model.engineName == "VLC" ? "Lettore Apple" : "Prova con VLC") { model.switchEngine() }.buttonStyle(GlassButtonStyle()) }
