@@ -198,7 +198,12 @@ extension Backend {
     /// genre (categories with the same genre merged, in a fixed sensible order), then every other category (platforms, years,
     /// collections) in the provider's order. One pass over the selection keeps only a few candidates per row, so a 100,000-film
     /// profile costs milliseconds, not seconds; rows are produced from `offset` on, `limit` at a time.
-    public func vodRows(profile p: Profile, kind: Kind, per: Int = 30, offset: Int = 0, limit: Int = Int.max, only: Set<String>? = nil) -> (total: Int, rows: [Row]) {
+    /// The titles a page is built from: the whole catalogue (`all`) or what the profile keeps in its list.
+    func pool(_ p: Profile, _ kind: Kind, all: Bool, _ sn: Library.Snap) -> [Item] {
+        all ? sn.items.filter { $0.kind == kind } : p.set(kind).compactMap { sn.byKey[$0] }
+    }
+
+    public func vodRows(profile p: Profile, kind: Kind, per: Int = 30, offset: Int = 0, limit: Int = Int.max, only: Set<String>? = nil, all: Bool = false) -> (total: Int, rows: [Row]) {
         let sn = lib.snap
         let n = max(per * 3, 12), keep = per * 2 + 4
         let noAdult = hideAdult(p)
@@ -210,8 +215,8 @@ extension Backend {
         var topQ = BoundedHeap(cap: n, worse: Backend.worseFirst)
         var hotQ = BoundedHeap(cap: n, worse: Backend.worseFirst)
         let hotAfter = Int(Date().timeIntervalSince1970) - 45 * 86400
-        for k in p.set(kind) {
-            guard let it = sn.byKey[k], !Hash.isSeparator(it.name) else { continue }        // list banners saved by an older version
+        for it in pool(p, kind, all: all, sn) {
+            if Hash.isSeparator(it.name) { continue }                                         // list banners saved by an older version
             if noAdult && Genres.isAdult(it.cat) { continue }
             let c: CatAcc
             if let e = cats[it.cat] { c = e } else {
@@ -310,14 +315,13 @@ extension Backend {
     }
 
     /// The items of a profile's selection, filtered by categories (or a genre), paged: the "see all" screen of a row.
-    public func vodItems(profile p: Profile, kind: Kind, cats: [String]? = nil, genre: String? = nil, offset: Int = 0, limit: Int = 60) -> (total: Int, items: [Card]) {
+    public func vodItems(profile p: Profile, kind: Kind, cats: [String]? = nil, genre: String? = nil, offset: Int = 0, limit: Int = 60, all: Bool = false) -> (total: Int, items: [Card]) {
         let sn = lib.snap
         let catSet = cats.map { Set($0) }
         var out: [Card] = []
         var total = 0
         let noAdult = hideAdult(p)
-        for k in p.set(kind) {
-            guard let it = sn.byKey[k] else { continue }
+        for it in pool(p, kind, all: all, sn) {
             if noAdult && Genres.isAdult(it.cat) { continue }
             if let g = genre, !g.isEmpty {
                 let gs = genres.get(it.key)

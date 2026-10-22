@@ -46,6 +46,10 @@ public final class PlayerModel: ObservableObject {
     @Published public private(set) var upNextIn: Int = 0
     @Published public private(set) var resolution = ""
     @Published public var scrubbing = false
+    /// The channels the viewer can move between (the list the channel was chosen from).
+    @Published public private(set) var channels: [LiveChannel] = []
+    @Published public private(set) var isFav = false
+    @Published public private(set) var episode: EpisodeRow?
 
     public private(set) var engine: PlayerEngine
     private var engineId = "av"
@@ -67,8 +71,7 @@ public final class PlayerModel: ObservableObject {
     private var startAt: Int64 = 0
     private var resumeFloor: Int64 = 0
     private var lastSave = Date.distantPast
-    private var episode: EpisodeRow?
-    private var episodes: [EpisodeRow] = []
+    public private(set) var episodes: [EpisodeRow] = []
     private var seriesKey: String?
     private var vodKey: String?
     private var closed = false
@@ -77,6 +80,8 @@ public final class PlayerModel: ObservableObject {
     private var baseKey = ""
     private var playingKey = ""
     private var langApplied = false
+    private var lastTickPos: Int64 = -1
+    private var frozenSince: Date?
 
     public init(app: AppModel, request: PlayRequest) {
         self.app = app
@@ -102,13 +107,18 @@ public final class PlayerModel: ObservableObject {
             }
         }
         configureRemote()
+        OrientationLock.allowRotation(true)
         switch request {
         case .live(let key, let zap):
             zapKeys = zap.isEmpty ? [key] : zap
+            if !zapKeys.contains(key) { zapKeys.insert(key, at: 0) }
+            channels = app.backend.channelRows(zapKeys, profile: app.profile ?? Profile())
             startLive(key)
         case .movie(let key, let resume):
+            OrientationLock.request(landscape: true)              // films start full screen, like on a TV
             startMovie(key, resume: resume)
         case .episode(let ep, let sk, let all, let resume):
+            OrientationLock.request(landscape: true)
             seriesKey = sk
             episodes = all
             startEpisode(ep, resume: resume)
@@ -122,6 +132,7 @@ public final class PlayerModel: ObservableObject {
         saveResume(force: true)
         for t in [tickTask, hideTask, retryTask, zapTask, sleepTask, upNextTask, guideTask] { t?.cancel() }
         engine.stop()
+        OrientationLock.allowRotation(false)
         #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = false
         #endif
@@ -204,6 +215,8 @@ public final class PlayerModel: ObservableObject {
         }
         phase = .loading
         stallSince = nil
+        frozenSince = nil
+        lastTickPos = -1
         langApplied = false
         engine.load(EngineRequest(url: url, userAgent: p.ua.isEmpty ? Net.defaultUA : p.ua, live: isLive, startAtMs: startMs, bufferSeconds: seconds))
         refreshTracks()
@@ -223,9 +236,9 @@ public final class PlayerModel: ObservableObject {
         attempts = 0
         usedAlt = false
         notice = nil
-        let names = app.backend.packNames(app.profile ?? Profile())
         let shown = app.backend.item(baseKey) ?? it
-        title = names[baseKey] ?? Packs.cleanName(shown.name)
+        title = app.backend.channelName(baseKey)
+        isFav = app.isFav(baseKey)
         let idx = (zapKeys.firstIndex(of: baseKey) ?? 0) + 1
         subtitle = "Canale \(idx)"
         logo = shown.logo
@@ -266,7 +279,7 @@ public final class PlayerModel: ObservableObject {
         clearNoticeSoon()
     }
 
-    /// Moves to the next / previous channel; fast repeated calls only start the last one.
+    /// Moves to the next / previous channel. The name changes at once; fast repeated presses only start the last channel.
     public func zap(_ dir: Int) {
         guard isLive, zapKeys.count > 1 else { return }
         let i = zapKeys.firstIndex(of: pendingZapKey ?? baseKey) ?? zapKeys.firstIndex(of: baseKey) ?? 0
@@ -275,7 +288,7 @@ public final class PlayerModel: ObservableObject {
         showBanner(for: zapKeys[n], number: n + 1)
         zapTask?.cancel()
         zapTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 450_000_000)
+            try? await Task.sleep(nanoseconds: 300_000_000)
             guard !Task.isCancelled, let self = self, let k = self.pendingZapKey else { return }
             self.pendingZapKey = nil
             self.startLive(k)
@@ -295,8 +308,7 @@ public final class PlayerModel: ObservableObject {
 
     private func showBanner(for key: String, number: Int) {
         guard let it = app.backend.item(key) else { return }
-        let names = app.backend.packNames(app.profile ?? Profile())
-        let nm = names[key] ?? Packs.cleanName(it.name)
+        let nm = app.backend.channelName(key)
         zapBanner = Banner(number: number, name: nm, logo: it.logo)
         title = nm
         subtitle = "Canale \(number)"
@@ -308,10 +320,11 @@ public final class PlayerModel: ObservableObject {
         }
     }
 
-    public var zapList: [LiveChannel] {
-        let all = app.backend.liveList(profile: app.profile ?? Profile())
-        let set = Set(zapKeys)
-        return all.filter { set.contains($0.key) }
+    public func toggleFav() {
+        guard isLive else { return }
+        app.toggleFav(baseKey)
+        isFav = app.isFav(baseKey)
+        channels = app.backend.channelRows(zapKeys, profile: app.profile ?? Profile())
     }
 
     private func refreshGuide() {
@@ -386,6 +399,20 @@ public final class PlayerModel: ObservableObject {
     }
 
     public var hasNextEpisode: Bool { nextEpisodeRow != nil }
+
+    /// The episodes of the season being watched, for the list under the picture.
+    public var seasonEpisodes: [EpisodeRow] {
+        guard let e = episode else { return [] }
+        return episodes.filter { $0.season == e.season }
+    }
+
+    public func playEpisode(_ ep: EpisodeRow) {
+        guard ep.rk != episode?.rk else { return }
+        saveResume(force: true)
+        upNextTask?.cancel()
+        upNext = nil
+        startEpisode(ep, resume: app.profile?.resume[ep.rk] ?? 0)
+    }
 
     public func playNextEpisode() {
         guard let n = nextEpisodeRow else { return }
@@ -504,10 +531,24 @@ public final class PlayerModel: ObservableObject {
 
     private func tick() {
         guard !closed else { return }
-        if !scrubbing {
-            let pos = engine.positionMs
-            if pos != positionMs { positionMs = pos }
+        let pos = engine.positionMs
+        if !scrubbing && pos != positionMs { positionMs = pos }
+        // The clock of the picture is the truth: some engines (VLC above all) keep saying "buffering" while the video runs.
+        let moving = lastTickPos >= 0 && pos > lastTickPos && pos - lastTickPos < 3000
+        if moving {
+            frozenSince = nil
+            if phase == .buffering || phase == .loading {
+                phase = .playing
+                stallSince = nil
+                if playingSince == nil { playingSince = Date() }
+                notice = nil
+            }
+        } else if isLive, phase == .playing, pos > 0, pos == lastTickPos {
+            // a live picture whose clock stopped without the engine noticing: the stream dropped
+            if frozenSince == nil { frozenSince = Date() }
+            if let f = frozenSince, Date().timeIntervalSince(f) > 20 { frozenSince = nil; failed("Il flusso si è fermato") }
         }
+        lastTickPos = pos
         let dur = engine.durationMs
         if dur != durationMs { durationMs = dur }
         if phase == .playing { saveResume(force: false); updateNowPlayingTime() }

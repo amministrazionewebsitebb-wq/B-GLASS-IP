@@ -1,27 +1,32 @@
 import BGlassCore
 import SwiftUI
 
-/// The films or series page: Netflix-style rows by genre, built from the viewer's own selection.
-struct VODBrowserView: View {
+/// Films and series: a shop window on top, then rows by genre of the whole catalogue.
+struct OnDemandView: View {
     @EnvironmentObject var app: AppModel
-    let kind: Kind
+    @State private var kind = Kind.movie
     @State private var rows: [Row] = []
     @State private var total = 0
     @State private var loaded = false
     @State private var loadingMore = false
 
-    private var title: String { kind == .movie ? "Film" : "Serie TV" }
+    private struct LoadKey: Equatable { var data: DataKey; var kind: Kind }
 
     var body: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 24) {
+            LazyVStack(alignment: .leading, spacing: 26) {
+                PillPicker(items: [(Kind.movie, "Film"), (Kind.series, "Serie TV")], selection: $kind)
                 LoadingBanner()
                 if !loaded {
-                    RailSkeleton(title: "In evidenza"); RailSkeleton(); RailSkeleton()
+                    RailSkeleton(); RailSkeleton(); RailSkeleton()
                 } else if rows.isEmpty {
-                    emptyState.frame(maxWidth: .infinity).padding(.top, 60)
+                    EmptyState(icon: kind == .movie ? "film" : "rectangle.stack",
+                               title: app.libraryReady ? (kind == .movie ? "Nessun film nella lista" : "Nessuna serie nella lista") : "Carico il catalogo…",
+                               message: app.libraryReady ? "La tua lista non contiene questa parte, oppure va aggiornata." : "")
+                        .frame(maxWidth: .infinity).padding(.top, 40)
                 } else {
-                    if let hero = heroCard { HeroCard(card: hero) }
+                    let featured = (rows.first { $0.rowId == "trend" || $0.rowId == "top" } ?? rows[0]).items.filter { $0.logo != nil }.prefix(6)
+                    if !featured.isEmpty { HeroCarousel(cards: Array(featured)) }
                     ForEach(rows) { r in
                         PosterRail(title: r.title, cards: r.items,
                                    route: r.cats != nil ? CategoryRoute(title: r.title, kind: kind, cats: r.cats ?? [], genre: r.genre) : nil)
@@ -29,37 +34,21 @@ struct VODBrowserView: View {
                     }
                     if loadingMore { ProgressView().tint(.white).frame(maxWidth: .infinity) }
                 }
-                Color.clear.frame(height: 24)
+                Color.clear.frame(height: 20)
             }
+            .padding(.top, 4)
         }
         .background(GlassBackground())
-        .navigationTitle(title)
+        .navigationTitle("On Demand")
         .toolbar { ToolbarItem(placement: .primaryAction) { ProfileMenu() } }
         .refreshable { app.refreshNow() }
-        .task(id: app.dataKey) { await reload() }
-    }
-
-    private var heroCard: Card? {
-        let r = rows.first { $0.rowId == "trend" || $0.rowId == "top" } ?? rows.first
-        return r?.items.first { $0.logo != nil }
-    }
-
-    @ViewBuilder private var emptyState: some View {
-        if !app.libraryReady {
-            VStack(spacing: 12) { ProgressView().tint(.white); Text("Carico \(kind == .movie ? "i film" : "le serie")…").foregroundStyle(Theme.secondaryText) }
-        } else if (app.profile?.set(kind).isEmpty ?? true) {
-            EmptyState(icon: kind == .movie ? "film" : "rectangle.stack", title: kind == .movie ? "Nessun film nel profilo" : "Nessuna serie nel profilo",
-                       message: "Scegli le categorie che ti interessano: vedrai solo quelle, in righe per genere.",
-                       action: "Scegli i contenuti") { app.setupProfile = app.profile }
-        } else {
-            EmptyState(icon: "magnifyingglass", title: "Niente da mostrare", message: "I contenuti scelti non sono più nella lista. Prova ad aggiornarla.")
-        }
+        .task(id: LoadKey(data: app.dataKey, kind: kind)) { await reload() }
     }
 
     private func reload() async {
         guard let p = app.profile else { return }
         let b = app.backend, k = kind
-        let r = await Task.detached(priority: .userInitiated) { b.vodRows(profile: p, kind: k, per: 24, offset: 0, limit: 8) }.value
+        let r = await Task.detached(priority: .userInitiated) { b.vodRows(profile: p, kind: k, per: 24, offset: 0, limit: 8, all: true) }.value
         rows = r.rows
         total = r.total
         loaded = true
@@ -69,7 +58,7 @@ struct VODBrowserView: View {
         guard !loadingMore, rows.count < total, let p = app.profile else { return }
         loadingMore = true
         let b = app.backend, k = kind, off = rows.count
-        let r = await Task.detached(priority: .userInitiated) { b.vodRows(profile: p, kind: k, per: 24, offset: off, limit: 6) }.value
+        let r = await Task.detached(priority: .userInitiated) { b.vodRows(profile: p, kind: k, per: 24, offset: off, limit: 6, all: true) }.value
         rows += r.rows.filter { x in !rows.contains { $0.id == x.id } }
         loadingMore = false
     }
@@ -83,11 +72,11 @@ struct CategoryGridView: View {
     @State private var total = 0
     @State private var busy = false
 
-    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 160), spacing: 12, alignment: .top)]
+    private let columns = [GridItem(.adaptive(minimum: 104, maximum: 150), spacing: 10, alignment: .top)]
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                 ForEach(cards) { c in
                     NavigationLink(value: c) { PosterCard(card: c, width: 104) }.buttonStyle(.plain)
                         .onAppear { if c.id == cards.last?.id { Task { await load() } } }
@@ -106,7 +95,9 @@ struct CategoryGridView: View {
         guard !busy, cards.isEmpty || cards.count < total, let p = app.profile else { return }
         busy = true
         let b = app.backend, off = cards.count, r = route
-        let page = await Task.detached(priority: .userInitiated) { b.vodItems(profile: p, kind: r.kind, cats: r.cats.isEmpty ? nil : r.cats, genre: r.genre, offset: off, limit: 60) }.value
+        let page = await Task.detached(priority: .userInitiated) {
+            b.vodItems(profile: p, kind: r.kind, cats: r.cats.isEmpty ? nil : r.cats, genre: r.genre, offset: off, limit: 60, all: true)
+        }.value
         total = page.total
         cards += page.items
         busy = false

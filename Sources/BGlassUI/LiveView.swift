@@ -1,52 +1,58 @@
 import BGlassCore
 import SwiftUI
 
-/// The TV page: the viewer's channels with what is on now, or the programme guide.
+/// The TV page: the channels with what is on now, or the programme guide.
 struct LiveView: View {
     @EnvironmentObject var app: AppModel
-    enum Mode: String { case list = "Canali", guide = "Guida" }
+    enum Mode: Hashable { case list, guide }
 
     @State private var mode: Mode
-
-    init(guide: Bool = false) { _mode = State(initialValue: guide ? .guide : .list) }
+    @State private var filter: LiveFilter?
     @State private var channels: [LiveChannel] = []
     @State private var guide: [String: (now: Prog?, next: Prog?)] = [:]
-    @State private var group = "Tutti"
+    @State private var categories: [LiveCategory] = []
+    @State private var hasMain = false
+    @State private var hasFavs = false
     @State private var query = ""
     @State private var loaded = false
-    @State private var pickerKey: String?
+    @State private var pickingCategory = false
 
-    private var groups: [String] {
-        var g = ["Tutti"]
-        if channels.contains(where: { $0.fav }) { g.append("Preferiti") }
-        var seen = Set<String>()
-        for c in channels where seen.insert(c.cat).inserted { g.append(c.cat) }
-        return g
+    init(guide: Bool = false) { _mode = State(initialValue: guide ? .guide : .list) }
+
+    private var current: LiveFilter { filter ?? (hasMain ? .main : .all) }
+
+    private var chips: [(LiveFilter, String)] {
+        var c: [(LiveFilter, String)] = []
+        if hasMain { c.append((.main, "Principali")) }
+        if hasFavs { c.append((.favorites, "Preferiti")) }
+        c.append((.all, "Tutti"))
+        if case .category(_, let name) = current { c.append((current, name)) }
+        return c
     }
 
     private var shown: [LiveChannel] {
-        var l = channels
-        if group == "Preferiti" { l = l.filter { $0.fav } } else if group != "Tutti" { l = l.filter { $0.cat == group } }
         let q = Hash.fold(query).trimmed
-        if !q.isEmpty { l = l.filter { Hash.fold($0.name).contains(q) } }
-        return l
+        return q.isEmpty ? channels : channels.filter { Hash.fold($0.name).contains(q) }
     }
 
+    private struct LoadKey: Equatable { var data: DataKey; var filter: LiveFilter }
+
     var body: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $mode) {
-                Text("Canali").tag(Mode.list); Text("Guida").tag(Mode.guide)
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 8)
-            if !channels.isEmpty { chips }
+        VStack(spacing: 12) {
+            PillPicker(items: [(Mode.list, "Canali"), (Mode.guide, "Guida TV")], selection: $mode)
+            ChipBar(items: chips, selection: Binding(get: { current }, set: { filter = $0 }),
+                    trailing: categories.isEmpty ? nil : ("Categorie", { pickingCategory = true }))
             if !loaded {
                 Spacer(); ProgressView().tint(.white); Spacer()
-            } else if channels.isEmpty {
+            } else if shown.isEmpty {
                 Spacer()
-                EmptyState(icon: "tv", title: "Nessun canale nel profilo",
-                           message: "Scegli i pacchetti consigliati (sport, cinema, news…) o le categorie della tua lista.",
-                           action: "Scegli i canali") { app.setupProfile = app.profile }
+                if current == .favorites {
+                    EmptyState(icon: "heart", title: "Nessun preferito", message: "Tieni premuto un canale e scegli «Aggiungi ai preferiti».")
+                } else if !query.isEmpty {
+                    EmptyState(icon: "magnifyingglass", title: "Nessun canale con questo nome")
+                } else {
+                    EmptyState(icon: "tv", title: app.liveReady ? "Nessun canale" : "Carico i canali…")
+                }
                 Spacer()
             } else if mode == .list {
                 list
@@ -54,114 +60,127 @@ struct LiveView: View {
                 GuideView(channels: shown, play: { app.playLive($0, among: shown.map { $0.key }) })
             }
         }
+        .padding(.top, 4)
         .background(GlassBackground())
         .navigationTitle("TV")
         .toolbar { ToolbarItem(placement: .primaryAction) { ProfileMenu() } }
         .searchable(text: $query, prompt: "Cerca un canale")
         .refreshable { app.refreshNow() }
-        .task(id: app.dataKey) { await reload() }
+        .task(id: LoadKey(data: app.dataKey, filter: current)) { await reload() }
         .task(id: app.guideRevision) {
-            // what is on changes by the minute
-            while !Task.isCancelled {
+            while !Task.isCancelled {                          // what is on changes by the minute
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 await refreshGuideNow()
             }
         }
-    }
-
-    private var chips: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(groups, id: \.self) { g in
-                    Button { withAnimation(.easeOut(duration: 0.15)) { group = g }; Haptics.tap() } label: {
-                        Text(g).font(.system(size: 13, weight: .semibold)).padding(.horizontal, 13).padding(.vertical, 7)
-                            .background(group == g ? AnyShapeStyle(Theme.cyan) : AnyShapeStyle(Color.white.opacity(0.09)), in: Capsule())
-                            .foregroundStyle(group == g ? Color.black.opacity(0.85) : .white)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 16)
+        .sheet(isPresented: $pickingCategory) {
+            CategoryPicker(categories: categories) { c in filter = .category(src: c.src, name: c.name); pickingCategory = false }
         }
-        .padding(.bottom, 8)
     }
 
     private var list: some View {
         ScrollView {
-            LazyVStack(spacing: 8) {
-                LoadingBanner()
+            LoadingBanner().padding(.bottom, 6)
+            LazyVStack(spacing: 0) {
                 ForEach(shown) { c in
-                    Button { app.playLive(c.key, among: shown.map { $0.key }) } label: { ChannelRowView(channel: c, now: guide[c.key]?.now, next: guide[c.key]?.next) }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            Button { app.toggleFav(c.key) } label: { Label(c.fav ? "Togli dai preferiti" : "Aggiungi ai preferiti", systemImage: c.fav ? "heart.slash" : "heart") }
-                            Button(role: .destructive) { remove(c) } label: { Label("Rimuovi dal profilo", systemImage: "minus.circle") }
+                    Button { app.playLive(c.key, among: shown.map { $0.key }) } label: {
+                        ChannelRowView(channel: c, now: guide[c.key]?.now, next: guide[c.key]?.next)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button { app.toggleFav(c.key); Task { await reload() } } label: {
+                            Label(c.fav ? "Togli dai preferiti" : "Aggiungi ai preferiti", systemImage: c.fav ? "heart.slash" : "heart")
                         }
+                    }
                 }
-                if shown.isEmpty { Text("Nessun canale corrisponde.").foregroundStyle(Theme.secondaryText).padding(.top, 40) }
             }
-            .padding(.horizontal, 16).padding(.bottom, 24)
+            .padding(.bottom, 24)
         }
-    }
-
-    private func remove(_ c: LiveChannel) {
-        guard let p = app.profile else { return }
-        app.backend.select(p.id, kind: .live, keys: [c.key], on: false)
-        app.reloadProfile()
-        app.show("«\(c.name)» tolto dal profilo")
     }
 
     private func reload() async {
         guard let p = app.profile else { return }
-        let b = app.backend
-        let (l, g) = await Task.detached(priority: .userInitiated) { () -> ([LiveChannel], [String: (now: Prog?, next: Prog?)]) in
-            let l = b.liveList(profile: p)
-            return (l, b.nowNext(keys: l.map { $0.key }))
+        let b = app.backend, f = current
+        let r = await Task.detached(priority: .userInitiated) { () -> (Bool, [LiveCategory], [LiveChannel], [String: (now: Prog?, next: Prog?)]) in
+            let main = b.mainChannels().count >= 6
+            let effective: LiveFilter = (f == .main && !main) ? .all : f
+            let list = b.channels(effective, profile: p)
+            return (main, b.liveCategories(profile: p), list, b.nowNext(keys: list.prefix(3000).map { $0.key }))
         }.value
-        channels = l
-        guide = g
+        hasMain = r.0
+        categories = r.1
+        channels = r.2
+        guide = r.3
+        hasFavs = !p.favs.isEmpty
         loaded = true
-        if !groups.contains(group) { group = "Tutti" }
     }
 
     private func refreshGuideNow() async {
-        let keys = channels.map { $0.key }
+        let keys = channels.prefix(3000).map { $0.key }
         let b = app.backend
         guide = await Task.detached { b.nowNext(keys: keys) }.value
     }
 }
 
 struct ChannelRowView: View {
-    @EnvironmentObject var app: AppModel
     let channel: LiveChannel
     let now: Prog?
     let next: Prog?
+    var playing = false
 
     var body: some View {
-        HStack(spacing: 12) {
-            Text("\(channel.num)").font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(Theme.tertiaryText).frame(width: 28, alignment: .trailing)
-            ChannelLogo(channel: channel.name, logo: channel.logo)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 5) {
-                    Text(channel.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                    if channel.radio { Image(systemName: "dot.radiowaves.left.and.right").font(.system(size: 11)).foregroundStyle(Theme.cyan) }
+        HStack(spacing: 14) {
+            ChannelLogo(channel: channel.name, logo: channel.logo, width: 76, height: 50)
+                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(playing ? Theme.cyan : Color.clear, lineWidth: 2))
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text("\(channel.num)").font(.system(size: 12, weight: .bold)).monospacedDigit().foregroundStyle(Theme.tertiaryText)
+                    Text(channel.name).font(.system(size: 13, weight: .semibold)).foregroundStyle(playing ? Theme.cyan : Theme.secondaryText).lineLimit(1)
+                    if channel.fav { Image(systemName: "heart.fill").font(.system(size: 9)).foregroundStyle(Theme.live) }
                 }
+                Text(now?.t ?? (channel.radio ? "Radio" : "In diretta")).font(.system(size: 16, weight: .semibold)).lineLimit(1)
                 if let n = now {
-                    Text(n.t).font(.system(size: 13)).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
-                    if n.e > n.s { ProgressLine(fraction: min(1, max(0, Double(Int64(Date().timeIntervalSince1970) - n.s) / Double(n.e - n.s))), height: 2.5).padding(.trailing, 20) }
-                    if let x = next { Text("\(TimeText.clock(x.s))  \(x.t)").font(.system(size: 11)).foregroundStyle(Theme.tertiaryText).lineLimit(1) }
-                } else {
-                    Text(channel.hasEpg ? "Guida in aggiornamento" : "In diretta").font(.system(size: 12)).foregroundStyle(Theme.tertiaryText)
+                    HStack(spacing: 8) {
+                        ProgressLine(fraction: TimeText.fraction(n), height: 3).frame(width: 70)
+                        Text("\(TimeText.clock(n.s)) – \(TimeText.clock(n.e))").font(.system(size: 12)).monospacedDigit().foregroundStyle(Theme.tertiaryText)
+                    }
+                }
+                if let x = next {
+                    Text("Poi \(TimeText.clock(x.s)) · \(x.t)").font(.system(size: 12)).foregroundStyle(Theme.tertiaryText).lineLimit(1)
                 }
             }
             Spacer(minLength: 0)
-            Button { app.toggleFav(channel.key) } label: {
-                Image(systemName: channel.fav ? "heart.fill" : "heart").font(.system(size: 16)).foregroundStyle(channel.fav ? Theme.live : Theme.tertiaryText).frame(width: 34, height: 34)
-            }
-            .buttonStyle(.plain)
+            if playing { Image(systemName: "speaker.wave.2.fill").font(.system(size: 14)).foregroundStyle(Theme.cyan) }
         }
-        .padding(.horizontal, 12).padding(.vertical, 10)
-        .glass(radius: 16)
+        .padding(.horizontal, 16).padding(.vertical, 10)
+        .background(playing ? Theme.cyan.opacity(0.10) : Color.clear)
+        .overlay(alignment: .bottom) { Rectangle().fill(Theme.stroke).frame(height: 1).padding(.leading, 106) }
+        .contentShape(Rectangle())
+    }
+}
+
+struct CategoryPicker: View {
+    let categories: [LiveCategory]
+    let pick: (LiveCategory) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            List(categories.filter { query.isEmpty || Hash.fold($0.label).contains(Hash.fold(query)) }) { c in
+                Button { pick(c) } label: {
+                    HStack { Text(c.label).lineLimit(1); Spacer(); Text("\(c.count)").foregroundStyle(Theme.tertiaryText) }
+                }
+                .listRowBackground(Theme.surface)
+            }
+            .groupedList()
+            .background(GlassBackground())
+            .searchable(text: $query, prompt: "Cerca una categoria")
+            .navigationTitle("Categorie")
+            .inlineTitle()
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Chiudi") { dismiss() } } }
+        }
+        .preferredColorScheme(.dark)
     }
 }
 
@@ -175,10 +194,10 @@ struct GuideView: View {
     @State private var window: [String: [Prog]] = [:]
     @State private var selected: GuideSelection?
 
-    private let rowH: CGFloat = 58
-    private let headH: CGFloat = 30
-    private let colW: CGFloat = 86
-    private let ppm: CGFloat = 4.6                    // points per minute
+    private let rowH: CGFloat = 62
+    private let headH: CGFloat = 32
+    private let colW: CGFloat = 78
+    private let ppm: CGFloat = 4.4                    // points per minute
 
     struct GuideSelection: Identifiable {
         let channel: LiveChannel
@@ -198,21 +217,19 @@ struct GuideView: View {
             HStack(alignment: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     Color.clear.frame(width: colW, height: headH)
-                    ForEach(channels.prefix(250)) { c in
-                        HStack(spacing: 6) {
-                            ChannelLogo(channel: c.name, logo: c.logo, width: 44, height: 32)
-                            Text("\(c.num)").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.tertiaryText)
+                    ForEach(channels.prefix(300)) { c in
+                        Button { play(c.key) } label: {
+                            ChannelLogo(channel: c.name, logo: c.logo, width: 62, height: 42).frame(width: colW, height: rowH)
                         }
-                        .frame(width: colW, height: rowH)
-                        .onTapGesture { play(c.key) }
+                        .buttonStyle(.plain)
                     }
                 }
-                .background(.ultraThinMaterial)
+                .background(Theme.ink)
                 ScrollView(.horizontal, showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 0) {
                         header
                         LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(channels.prefix(250)) { c in row(c) }
+                            ForEach(channels.prefix(300)) { c in row(c) }
                         }
                     }
                     .overlay(alignment: .topLeading) { nowLine }
@@ -229,14 +246,14 @@ struct GuideView: View {
             ForEach(0..<16, id: \.self) { i in
                 let t = from + Int64(i) * 1800
                 Text(TimeText.clock(t)).font(.system(size: 12, weight: .semibold)).monospacedDigit().foregroundStyle(Theme.secondaryText)
-                    .offset(x: CGFloat(i) * 30 * ppm + 6, y: 6)
+                    .offset(x: CGFloat(i) * 30 * ppm + 6, y: 8)
             }
         }
     }
 
     private var nowLine: some View {
         let x = CGFloat(Int64(Date().timeIntervalSince1970) - from) / 60 * ppm
-        return Rectangle().fill(Theme.live).frame(width: 1.5).frame(maxHeight: .infinity).offset(x: x).allowsHitTesting(false)
+        return Rectangle().fill(Theme.live).frame(width: 2).frame(maxHeight: .infinity).offset(x: x).allowsHitTesting(false)
     }
 
     private func row(_ c: LiveChannel) -> some View {
@@ -245,7 +262,7 @@ struct GuideView: View {
         return ZStack(alignment: .topLeading) {
             Color.clear.frame(width: width, height: rowH)
             if progs.isEmpty {
-                Text(c.hasEpg ? "…" : "Guida non disponibile").font(.system(size: 11)).foregroundStyle(Theme.tertiaryText).padding(.leading, 12).frame(height: rowH)
+                Text(c.name + " · guida non disponibile").font(.system(size: 12)).foregroundStyle(Theme.tertiaryText).padding(.leading, 12).frame(height: rowH)
             }
             ForEach(progs, id: \.s) { p in
                 let s = max(p.s, from), e = min(p.e, to)
@@ -254,14 +271,13 @@ struct GuideView: View {
                     let w = max(8, CGFloat(e - s) / 60 * ppm - 3)
                     let live = p.s <= now && p.e > now
                     Button { selected = GuideSelection(channel: c, prog: p) } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(p.t).font(.system(size: 12, weight: .semibold)).lineLimit(2).multilineTextAlignment(.leading)
-                            Text(TimeText.clock(p.s)).font(.system(size: 10)).foregroundStyle(Theme.secondaryText)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(p.t).font(.system(size: 13, weight: .semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                            Text("\(TimeText.clock(p.s))").font(.system(size: 11)).foregroundStyle(live ? Color.white.opacity(0.8) : Theme.tertiaryText)
                         }
-                        .padding(.horizontal, 7).padding(.vertical, 5)
+                        .padding(.horizontal, 8).padding(.vertical, 6)
                         .frame(width: w, height: rowH - 6, alignment: .topLeading)
-                        .background((live ? Theme.blue.opacity(0.85) : Color.white.opacity(0.08)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.white.opacity(live ? 0.35 : 0.12), lineWidth: 0.7))
+                        .background((live ? Theme.blue : Theme.surface), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
                         .clipped()
                     }
                     .buttonStyle(.plain)
@@ -273,7 +289,7 @@ struct GuideView: View {
     }
 
     private func load() async {
-        let keys = Array(channels.prefix(250)).map { $0.key }
+        let keys = Array(channels.prefix(300)).map { $0.key }
         let b = app.backend, f = from, t = to
         window = await Task.detached(priority: .userInitiated) { b.epgWindow(keys: keys, from: f, to: t) }.value
     }
@@ -298,15 +314,17 @@ struct ProgrammeSheet: View {
                     }
                     Text(prog.t).font(.system(size: 24, weight: .bold))
                     if !prog.d.isEmpty { Text(prog.d).font(.system(size: 15)).foregroundStyle(.white.opacity(0.85)) }
-                    Button { play() } label: { Label("Guarda il canale", systemImage: "play.fill").frame(maxWidth: .infinity) }.buttonStyle(GlassButtonStyle(prominent: true))
+                    Button { play() } label: { Label("Guarda il canale", systemImage: "play.fill").frame(maxWidth: .infinity) }
+                        .buttonStyle(GlassButtonStyle(prominent: true))
                 }
                 .padding(18)
             }
             .background(GlassBackground())
             .navigationTitle("Programma")
             .inlineTitle()
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Fine") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Chiudi") { dismiss() } } }
         }
         .presentationDetents([.medium, .large])
+        .preferredColorScheme(.dark)
     }
 }

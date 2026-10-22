@@ -8,22 +8,26 @@ struct SettingsView: View {
     @State private var editingList: Source?
     @State private var editor: ProfileEditorTarget?
     @State private var removing: Source?
-    @State private var expert = false
     @State private var askPin = false
     @State private var setPin = false
 
     var body: some View {
         NavigationStack {
             List {
+                Section("Le mie liste") {
+                    ForEach(app.sources) { s in sourceRow(s) }
+                    Button { addingList = true } label: { Label("Aggiungi una lista", systemImage: "plus.circle") }
+                    if !app.sources.isEmpty {
+                        NavigationLink { SubscriptionView() } label: { Label("Abbonamento e scadenza", systemImage: "calendar.badge.clock") }
+                    }
+                }
+
                 Section("Profili") {
                     ForEach(app.profiles) { p in
                         Button { editor = .edit(p) } label: {
                             HStack(spacing: 12) {
-                                Avatar(name: p.name, color: p.color, size: 34)
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(p.name).font(.system(size: 16, weight: .semibold))
-                                    Text("\(p.live.count) canali · \(p.movies.count) film · \(p.series.count) serie").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
-                                }
+                                Avatar(name: p.name, color: p.color, size: 32)
+                                Text(p.name).font(.system(size: 16, weight: .semibold))
                                 Spacer()
                                 if app.profile?.id == p.id { Text("In uso").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.cyan) }
                             }
@@ -33,40 +37,23 @@ struct SettingsView: View {
                     Button { editor = .new } label: { Label("Aggiungi un profilo", systemImage: "plus.circle") }
                 }
 
-                Section("Le mie liste") {
-                    ForEach(app.sources) { s in sourceRow(s) }
-                    Button { addingList = true } label: { Label("Aggiungi una lista", systemImage: "plus.circle") }
+                Section("Guida TV") { guideRows }
+
+                Section {
+                    playbackRows
+                } header: { Text("Riproduzione") } footer: {
+                    Text(Engines.vlcAvailable ? "Con «Automatico» B·Glass usa il lettore Apple e passa da solo a VLC quando un canale non parte." : "Questa versione non include VLC: alcuni flussi MKV o MPEG-TS potrebbero non aprirsi.")
                 }
 
-                Section("Abbonamento") {
-                    NavigationLink { SubscriptionView() } label: { Label("Scadenza e connessioni", systemImage: "calendar.badge.clock") }
-                }
-
-                Section("Canali e guida") {
-                    if let p = app.profile {
-                        NavigationLink { PacksView(profileId: p.id) } label: { Label("Canali consigliati", systemImage: "sparkles.tv") }
-                        Button { dismiss(); app.setupProfile = p } label: { Label("Scegli i contenuti", systemImage: "checklist") }
+                Section {
+                    Toggle(isOn: Binding(get: { app.flag("showAdult", false) }, set: { adultTapped($0) })) {
+                        Label("Contenuti per adulti", systemImage: "eye.slash")
                     }
-                    guideRows
-                }
+                } footer: { Text("Restano nascosti nei profili bambini. Per mostrarli serve un PIN.") }
 
-                Section("Riproduzione") { playbackRows }
-
-                Section("Rete") {
-                    NavigationLink { NetworkView() } label: { Label("Rete e velocità", systemImage: "speedometer") }
-                }
-
-                Section("Altro") {
-                    NavigationLink { AboutView(expert: expert) } label: { Label("Informazioni e dispositivo", systemImage: "info.circle") }
-                    if expert {
-                        Toggle(isOn: Binding(get: { app.flag("showAdult", false) }, set: { app.set("showAdult", flag: $0) })) {
-                            Label("Mostra i contenuti per adulti", systemImage: "eye")
-                        }
-                        Button(role: .destructive) { ImageLoader.shared.clearDisk(); app.show("Immagini rimosse dalla cache") } label: { Label("Svuota la cache delle immagini", systemImage: "trash") }
-                        Button { expert = false } label: { Label("Esci dalla modalità esperto", systemImage: "lock") }
-                    } else {
-                        Button { expertTapped() } label: { Label("Modalità esperto", systemImage: "lock.shield") }
-                    }
+                Section {
+                    NavigationLink { NetworkView() } label: { Label("Test della connessione", systemImage: "speedometer") }
+                    NavigationLink { AboutView() } label: { Label("Informazioni", systemImage: "info.circle") }
                 }
             }
             .groupedList()
@@ -78,26 +65,27 @@ struct SettingsView: View {
             .sheet(item: $editingList) { s in AddListView(editing: s) }
             .sheet(item: $editor) { t in ProfileEditorView(target: t) }
             .sheet(isPresented: $askPin) {
-                PinEntry(title: "PIN esperto", subtitle: "Serve per le opzioni avanzate e per i contenuti per adulti.", onDone: { pin in
-                    if hashed(pin) == app.setting("expertPin", "") { expert = true; askPin = false; return true }
+                PinEntry(title: "PIN", subtitle: "Inserisci il PIN per mostrare i contenuti per adulti.", onDone: { pin in
+                    if hashed(pin) == app.setting("expertPin", "") { app.set("showAdult", flag: true); askPin = false; return true }
                     return false
                 }, onCancel: { askPin = false })
             }
             .sheet(isPresented: $setPin) {
-                PinEntry(title: "Scegli un PIN esperto", subtitle: "4 cifre. Se lo dimentichi, cancella i dati dell'app.", onDone: { pin in
-                    app.set("expertPin", hashed(pin)); expert = true; setPin = false; return true
+                PinEntry(title: "Scegli un PIN", subtitle: "4 cifre: servirà per mostrare i contenuti per adulti.", onDone: { pin in
+                    app.set("expertPin", hashed(pin)); app.set("showAdult", flag: true); setPin = false; return true
                 }, onCancel: { setPin = false })
             }
             .confirmationDialog("Eliminare «\(removing?.name ?? "")»?", isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }), titleVisibility: .visible) {
                 Button("Elimina la lista", role: .destructive) { if let s = removing { app.removeSource(s.id) }; removing = nil }
-            } message: { Text("I profili tengono ciò che hanno scelto se un'altra lista lo contiene.") }
+            } message: { Text("Canali, film e serie di questa lista spariranno dall'app.") }
         }
         .preferredColorScheme(.dark)
     }
 
     private func hashed(_ pin: String) -> String { Hash.fnv("bglass-expert|" + pin) }
 
-    private func expertTapped() {
+    private func adultTapped(_ on: Bool) {
+        if !on { app.set("showAdult", flag: false); return }
         if app.setting("expertPin", "").isEmpty { setPin = true } else { askPin = true }
     }
 
@@ -138,42 +126,34 @@ struct SettingsView: View {
 
     @ViewBuilder private var guideRows: some View {
         HStack {
-            Label("Guida TV", systemImage: "calendar")
+            Label("Ultimo aggiornamento", systemImage: "calendar")
             Spacer()
-            Text(app.backend.epg.updated > 0 ? "\(app.backend.epg.channels) canali · \(TimeText.date(ms: app.backend.epg.updated))" : "Non ancora scaricata")
-                .font(.system(size: 12)).foregroundStyle(Theme.secondaryText).multilineTextAlignment(.trailing)
+            Text(app.backend.epg.updated > 0 ? TimeText.date(ms: app.backend.epg.updated) : "Mai")
+                .font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
         }
         Button { app.refreshGuide() } label: {
-            HStack { Label("Aggiorna la guida ora", systemImage: "arrow.clockwise"); Spacer(); if app.guideRefreshing { ProgressView().tint(.white) } }
+            HStack { Label("Aggiorna ora", systemImage: "arrow.clockwise"); Spacer(); if app.guideRefreshing { ProgressView().tint(.white) } }
         }
         .disabled(app.guideRefreshing)
-        Picker("Aggiornamento automatico", selection: Binding(get: { app.setting("epgEvery", "12") }, set: { app.set("epgEvery", $0) })) {
-            Text("Ogni 6 ore").tag("6"); Text("Ogni 12 ore").tag("12"); Text("Ogni giorno").tag("24"); Text("Mai").tag("0")
-        }
     }
 
     // MARK: playback
 
     @ViewBuilder private var playbackRows: some View {
-        Picker("Motore video", selection: Binding(get: { app.setting("engine", "auto") }, set: { app.set("engine", $0) })) {
-            Text("Automatico").tag("auto")
-            Text("AVPlayer (Apple)").tag("av")
-            if Engines.vlcAvailable { Text("VLC").tag("vlc") }
-        }
-        if !Engines.vlcAvailable {
-            Text("Questa versione non include VLC: i file MKV e i flussi MPEG-TS grezzi possono non aprirsi.").font(.system(size: 11)).foregroundStyle(Theme.tertiaryText)
-        }
-        Picker("Buffer", selection: Binding(get: { app.setting("buffer", "normal") }, set: { app.set("buffer", $0) })) {
-            Text("Minimo").tag("min"); Text("Normale").tag("normal"); Text("Alto").tag("high")
-        }
         Picker("Lingua dell'audio", selection: Binding(get: { app.setting("audioLang", "ita") }, set: { app.set("audioLang", $0) })) {
-            Text("Italiano").tag("ita"); Text("Inglese").tag("eng"); Text("Spagnolo").tag("spa"); Text("Francese").tag("fra"); Text("Tedesco").tag("deu"); Text("Predefinita").tag("auto")
+            Text("Italiano").tag("ita"); Text("Inglese").tag("eng"); Text("Spagnolo").tag("spa"); Text("Francese").tag("fra"); Text("Tedesco").tag("deu"); Text("Originale").tag("auto")
         }
         Picker("Sottotitoli", selection: Binding(get: { app.setting("subLang", "off") }, set: { app.set("subLang", $0) })) {
             Text("Spenti").tag("off"); Text("Italiano").tag("ita"); Text("Inglese").tag("eng")
         }
-        Toggle("Picture in Picture automatico", isOn: Binding(get: { app.flag("autoPiP", true) }, set: { app.set("autoPiP", flag: $0) }))
-        Toggle("Generi dei film da TMDB", isOn: Binding(get: { app.flag("tmdbGenres", true) }, set: { app.set("tmdbGenres", flag: $0) }))
+        Picker("Lettore", selection: Binding(get: { app.setting("engine", "auto") }, set: { app.set("engine", $0) })) {
+            Text("Automatico").tag("auto")
+            Text("Apple").tag("av")
+            if Engines.vlcAvailable { Text("VLC").tag("vlc") }
+        }
+        Picker("Stabilità", selection: Binding(get: { app.setting("buffer", "normal") }, set: { app.set("buffer", $0) })) {
+            Text("Avvio rapido").tag("min"); Text("Normale").tag("normal"); Text("Linea lenta").tag("high")
+        }
     }
 }
 
@@ -277,7 +257,7 @@ struct NetworkView: View {
         }
         .groupedList()
         .background(GlassBackground())
-        .navigationTitle("Rete e velocità")
+        .navigationTitle("Connessione")
         .inlineTitle()
         .task { addresses = NetInfo.addresses() }
     }
@@ -348,7 +328,7 @@ enum NetInfo {
 
 struct AboutView: View {
     @EnvironmentObject var app: AppModel
-    let expert: Bool
+    @State private var cache = ""
 
     var body: some View {
         List {
@@ -356,7 +336,12 @@ struct AboutView: View {
                 row("Versione", Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0")
                 row("Motore video", Engines.vlcAvailable ? "AVPlayer + VLC" : "AVPlayer")
                 row("Titoli in libreria", "\(app.backend.lib.snap.items.count)")
-                row("Cache immagini", ByteCountFormatter.string(fromByteCount: Int64(ImageLoader.shared.diskBytes()), countStyle: .file))
+                row("Cache immagini", cache)
+                Button("Svuota la cache delle immagini", role: .destructive) {
+                    ImageLoader.shared.clearDisk()
+                    cache = ByteCountFormatter.string(fromByteCount: Int64(ImageLoader.shared.diskBytes()), countStyle: .file)
+                    app.show("Cache svuotata")
+                }
             }
             Section("Dispositivo") {
                 row("Modello", deviceModel)
@@ -373,6 +358,7 @@ struct AboutView: View {
         .background(GlassBackground())
         .navigationTitle("Informazioni")
         .inlineTitle()
+        .onAppear { cache = ByteCountFormatter.string(fromByteCount: Int64(ImageLoader.shared.diskBytes()), countStyle: .file) }
     }
 
     private func row(_ k: String, _ v: String) -> some View { HStack { Text(k); Spacer(); Text(v).foregroundStyle(Theme.secondaryText) } }

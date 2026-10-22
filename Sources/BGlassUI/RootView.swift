@@ -32,9 +32,6 @@ public struct RootView: View {
         .fullScreenCoverCompat(item: Binding(get: { app.playRequest }, set: { if $0 == nil { app.playRequest = nil } })) { req in
             PlayerView(app: app, request: req).environmentObject(app)
         }
-        .fullScreenCoverCompat(item: $app.setupProfile) { p in
-            SetupFlowView(profileId: p.id).environmentObject(app)
-        }
         .sheet(isPresented: $app.showSettings) { SettingsView().environmentObject(app) }
         #if os(iOS)
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didReceiveMemoryWarningNotification)) { _ in

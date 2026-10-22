@@ -46,6 +46,13 @@ if [ "$STATUS" -ne 0 ]; then
   echo "==================== ERRORI DI COMPILAZIONE ===================="
   grep -E "error:|fatal error" xcodebuild.log | sort -u | head -60
   echo "================================================================"
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    # the same errors as annotations, so they show on the run page without opening the log
+    grep -E "^/.+:[0-9]+:[0-9]+: (fatal )?error: " xcodebuild.log | sort -u | head -30 | while IFS= read -r l; do
+      f="${l%%:*}"; rest="${l#*:}"; line="${rest%%:*}"
+      echo "::error file=${f#"$PWD"/},line=${line}::${l#*error: }"
+    done
+  fi
   exit "$STATUS"
 fi
 

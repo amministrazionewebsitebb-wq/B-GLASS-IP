@@ -203,3 +203,50 @@ func runPacksChecks(_ h: Harness) {
     international("foreign marked", markItalian: false, name: { n, cc in cc + ": " + n }, cat: { _ in "All" })
     international("101| IT: name", markItalian: true, name: { n, cc in "101| " + cc + ": " + n + " HD" }, cat: { _ in "Live" })
 }
+
+func runCatalogChecks(_ h: Harness) {
+    h.suite("catalog: main channels, filters, my list") {
+        let (lib, src) = libraryWith([
+            ("IT: RAI 1 FHD", "IT | Generali"), ("IT: RAI 1 HD", "IT | Generali"), ("Canale5 HD", "IT | Generali"), ("UK | Sky Sports Main Event", "UK"),
+            ("IT| SKY SPORT UNO FHD", "IT | Sport"), ("Sky Cinema Uno HD", "IT | Cinema"), ("Radio Zeta", "IT | Radio"), ("*xxx: Rai 1 HD", "XXX Live"),
+            ("Canale Locale", "IT | Locali"),
+        ])
+        let b = Backend(dir: tempDir("catalog"))
+        b.lib.replaceSource(src, [])                       // (unused source id 1 in this backend)
+        var s = Source(); s.name = "T"; s.type = .xtream; s.url = "http://x"; s.user = "u"; s.pass = "p"
+        s = b.lib.addSource(s)
+        b.lib.replaceSource(s.id, lib.snap.items.map { it in
+            let c = Item(src: s.id, kind: .live, key: it.key.replacingOccurrences(of: "\(src):", with: "\(s.id):"), name: it.name, cat: it.cat)
+            c.sid = it.sid; c.epgId = ""; return c
+        })
+        let main = b.mainChannels()
+        h.equal(main.map { $0.name }, ["Rai 1", "Canale 5", "Sky Cinema Uno", "Sky Sport Uno"], "clean names in pack order, no radios")
+        h.equal(main.first?.key ?? "", "\(s.id):l:2", "the HD copy is the main Rai 1")
+        var p = b.profiles.create(name: "Io", color: 0)
+        let m = b.channels(.main, profile: p)
+        h.equal(m.map { $0.num }, [1, 2, 3, 4])
+        h.equal(b.channels(.all, profile: p).count, 8, "adult channels are hidden")
+        let cats = b.liveCategories(profile: p)
+        h.check(!cats.contains { $0.name == "XXX Live" })
+        h.equal(b.channels(.category(src: s.id, name: "IT | Generali"), profile: p).count, 3)
+        _ = b.toggleFav(p.id, key: "\(s.id):l:9")
+        p = b.profiles.get(p.id)!
+        h.equal(b.channels(.favorites, profile: p).map { $0.name }, ["Canale Locale"])
+        h.check(b.channels(.all, profile: p).first { $0.key == "\(s.id):l:9" }?.fav ?? false)
+        h.equal(b.channelRows(["\(s.id):l:5", "\(s.id):l:2"], profile: p).map { $0.name }, ["Sky Sport Uno", "Rai 1"])
+        h.check(b.guideKeys().starts(with: main.map { $0.key }))
+        h.check(!b.guideKeys().contains("\(s.id):l:8"), "no guide for adult channels")
+        // my list: films and series only
+        let film = Item(src: s.id, kind: .movie, key: "\(s.id):m:1", name: "Film", cat: "Azione")
+        b.lib.replaceKinds(s.id, kinds: [.movie], [film], wanted: nil)
+        h.check(b.toggleMyList(p.id, key: film.key))
+        h.equal(b.myList(profile: b.profiles.get(p.id)!).map { $0.key }, [film.key])
+        h.check(!b.toggleMyList(p.id, key: film.key))
+        h.check(b.myList(profile: b.profiles.get(p.id)!).isEmpty)
+        h.check(!b.toggleMyList(p.id, key: "\(s.id):l:2"), "channels are not for my list")
+        // the whole catalogue feeds the rows, whatever the profile picked
+        let rows = b.vodRows(profile: b.profiles.get(p.id)!, kind: .movie, all: true)
+        h.equal(rows.rows.first?.items.first?.key ?? "", film.key)
+        h.equal(b.vodItems(profile: b.profiles.get(p.id)!, kind: .movie, cats: ["Azione"], all: true).total, 1)
+    }
+}

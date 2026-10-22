@@ -1,84 +1,110 @@
 import BGlassCore
 import SwiftUI
 
+/// One box for everything: channels, films and series of the whole list.
 struct SearchView: View {
     @EnvironmentObject var app: AppModel
     @State private var text = ""
-    @State private var everything = false
     @State private var results = SearchResults()
     @State private var searched = false
 
-    private struct Key: Equatable { var text: String; var everything: Bool; var content: Int }
+    private struct Key: Equatable { var text: String; var content: Int }
+    private var short: Bool { Hash.fold(text).trimmed.unicodeScalars.count < 3 }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                Picker("", selection: $everything) {
-                    Text("I miei contenuti").tag(false)
-                    Text("Tutta la lista").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .padding(.horizontal, 16)
-                if Hash.fold(text).trimmed.unicodeScalars.count < 3 {
-                    EmptyState(icon: "magnifyingglass", title: "Cerca in B-Glass",
-                               message: everything ? "Cerca in tutta la lista del provider e aggiungi i titoli al tuo profilo." : "Scrivi almeno tre lettere per cercare tra i tuoi canali, film e serie.")
-                        .frame(maxWidth: .infinity).padding(.top, 40)
+            VStack(alignment: .leading, spacing: 24) {
+                if short {
+                    recents
                 } else if searched && results.isEmpty {
-                    EmptyState(icon: "questionmark.circle", title: "Nessun risultato", message: everything ? "Nemmeno nella lista intera." : "Prova «Tutta la lista» per cercare anche fuori dal tuo profilo.")
+                    EmptyState(icon: "questionmark.circle", title: "Nessun risultato", message: "Controlla come è scritto o prova con meno parole.")
                         .frame(maxWidth: .infinity).padding(.top, 40)
                 } else {
-                    if !results.movies.isEmpty { PosterRail(title: "Film (\(results.moviesTotal))", cards: results.movies) }
-                    if !results.series.isEmpty { PosterRail(title: "Serie TV (\(results.seriesTotal))", cards: results.series) }
-                    if !results.live.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            SectionTitle(title: "Canali (\(results.liveTotal))")
-                            LazyVStack(spacing: 8) {
-                                ForEach(results.live.prefix(40)) { c in
-                                    Button { app.playLive(c.key, among: results.live.map { $0.key }) } label: {
-                                        HStack(spacing: 12) {
-                                            ChannelLogo(channel: c.name, logo: c.logo)
-                                            Text(c.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
-                                            Spacer()
-                                            if !(app.profile?.live.contains(c.key) ?? false) {
-                                                Button { add(c) } label: { Image(systemName: "plus.circle").font(.system(size: 22)).foregroundStyle(Theme.cyan) }.buttonStyle(.plain)
-                                            }
-                                        }
-                                        .padding(10).glass(radius: 14)
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                            .padding(.horizontal, 16)
-                        }
-                    }
+                    if !results.live.isEmpty { channels }
+                    if !results.movies.isEmpty { PosterRail(title: "Film", cards: results.movies) }
+                    if !results.series.isEmpty { PosterRail(title: "Serie TV", cards: results.series) }
                 }
                 Color.clear.frame(height: 24)
             }
             .padding(.top, 6)
         }
+        .scrollDismissesKeyboard(.immediately)
         .background(GlassBackground())
         .navigationTitle("Cerca")
         .toolbar { ToolbarItem(placement: .primaryAction) { ProfileMenu() } }
-        .searchable(text: $text, prompt: "Film, serie, canali")
+        .searchable(text: $text, prompt: "Canali, film, serie")
+        .onSubmit(of: .search) { remember(text) }
         .task { let b = app.backend; await Task.detached(priority: .utility) { b.warmSearch() }.value }
-        .task(id: Key(text: text, everything: everything, content: app.contentRevision)) { await run() }
+        .task(id: Key(text: text, content: app.contentRevision)) { await run() }
+    }
+
+    private var channels: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            SectionTitle(title: "Canali")
+            LazyVStack(spacing: 0) {
+                ForEach(results.live.prefix(12)) { c in
+                    Button { remember(text); app.playLive(c.key, among: results.live.map { $0.key }) } label: {
+                        HStack(spacing: 12) {
+                            ChannelLogo(channel: c.name, logo: c.logo, width: 64, height: 42)
+                            Text(c.name).font(.system(size: 16, weight: .semibold)).lineLimit(1)
+                            Spacer()
+                            Image(systemName: "play.circle.fill").font(.system(size: 24)).foregroundStyle(.white.opacity(0.85))
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 7)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var recents: some View {
+        let list = recentList
+        if list.isEmpty {
+            EmptyState(icon: "magnifyingglass", title: "Cerca in B·Glass", message: "Scrivi il nome di un canale, di un film o di una serie.")
+                .frame(maxWidth: .infinity).padding(.top, 40)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack {
+                    Text("Ricerche recenti").font(.system(size: 20, weight: .bold))
+                    Spacer()
+                    Button("Cancella") { app.set("recentSearches", "") }.font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.secondaryText)
+                }
+                .padding(.horizontal, 16).padding(.bottom, 6)
+                ForEach(list, id: \.self) { q in
+                    Button { text = q } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "clock.arrow.circlepath").foregroundStyle(Theme.tertiaryText)
+                            Text(q).font(.system(size: 16))
+                            Spacer()
+                            Image(systemName: "arrow.up.left").font(.system(size: 13)).foregroundStyle(Theme.tertiaryText)
+                        }
+                        .padding(.horizontal, 16).padding(.vertical, 11)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var recentList: [String] { app.setting("recentSearches", "").split(separator: "\n").map(String.init) }
+
+    private func remember(_ q: String) {
+        let t = q.trimmed
+        guard t.count >= 3 else { return }
+        let list = [t] + recentList.filter { Hash.fold($0) != Hash.fold(t) }
+        app.set("recentSearches", list.prefix(8).joined(separator: "\n"))
     }
 
     private func run() async {
         guard let p = app.profile else { return }
-        if Hash.fold(text).trimmed.unicodeScalars.count < 3 { results = SearchResults(); searched = false; return }
+        if short { results = SearchResults(); searched = false; return }
         try? await Task.sleep(nanoseconds: 260_000_000)                       // wait for the end of the typing
         if Task.isCancelled { return }
-        let b = app.backend, q = text, all = everything
-        results = await Task.detached(priority: .userInitiated) { b.search(q, profile: p, everything: all) }.value
+        let b = app.backend, q = text
+        results = await Task.detached(priority: .userInitiated) { b.search(q, profile: p, everything: true) }.value
         searched = true
-    }
-
-    private func add(_ c: Card) {
-        guard let p = app.profile else { return }
-        app.backend.select(p.id, kind: .live, keys: [c.key], on: true)
-        app.reloadProfile()
-        Haptics.tap()
-        app.show("«\(c.name)» aggiunto al tuo profilo")
     }
 }

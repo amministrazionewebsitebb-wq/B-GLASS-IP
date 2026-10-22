@@ -53,6 +53,13 @@ final class VLCEngine: NSObject, PlayerEngine, VLCMediaPlayerDelegate {
         Task { @MainActor in self.stateChanged() }
     }
 
+    /// The picture moves: whatever the last state said, it is playing.
+    nonisolated func mediaPlayerTimeChanged(_ aNotification: Notification!) {
+        Task { @MainActor in
+            if self.last == .loading || self.last == .buffering { self.set(.playing) }
+        }
+    }
+
     private func stateChanged() {
         switch player.state {
         case .opening: set(.loading)

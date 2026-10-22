@@ -53,6 +53,15 @@ extension View {
         #endif
     }
 
+    /// Pages that draw their own header (the home page).
+    @ViewBuilder func hideNavBar() -> some View {
+        #if os(iOS)
+        toolbar(.hidden, for: .navigationBar)
+        #else
+        self
+        #endif
+    }
+
     @ViewBuilder func clearNavBar() -> some View {
         #if os(iOS)
         toolbarBackground(.hidden, for: .navigationBar)

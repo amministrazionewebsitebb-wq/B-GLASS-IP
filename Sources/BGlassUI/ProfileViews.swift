@@ -241,8 +241,7 @@ struct ProfileEditorView: View {
                             }
                         }
                         .padding(14).glass(radius: 16)
-                        if let p = existing {
-                            Button("Scegli canali, film e serie") { dismiss(); app.setupProfile = app.backend.profiles.get(p.id) }.buttonStyle(GlassButtonStyle())
+                        if existing != nil {
                             if app.profiles.count > 1 { Button("Elimina il profilo", role: .destructive) { confirmDelete = true }.padding(.top, 6) }
                         }
                     }

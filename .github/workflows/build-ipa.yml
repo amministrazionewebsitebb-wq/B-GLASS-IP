@@ -22,6 +22,8 @@ jobs:
   ipa:
     name: Unsigned IPA
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Tools
@@ -53,3 +55,13 @@ jobs:
           name: BGlass-ipa
           path: BGlass.ipa
           if-no-files-found: error
+      - name: Publish the release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" BGlass.ipa --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" BGlass.ipa --title "B·Glass ${GITHUB_REF_NAME#v}" --notes-file RELEASE_NOTES.md
+          fi

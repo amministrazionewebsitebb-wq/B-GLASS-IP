@@ -58,8 +58,6 @@ public final class AppModel: ObservableObject {
     @Published public var toast: ToastMessage?
     @Published public var playRequest: PlayRequest?
     @Published public var showSettings = false
-    /// A profile whose content is being chosen (right after it is created, or from the settings).
-    @Published public var setupProfile: Profile?
     @Published public var addingList = false
     @Published public private(set) var guideRefreshing = false
 
@@ -122,10 +120,12 @@ public final class AppModel: ObservableObject {
 
     private func decideStage() {
         if sources.isEmpty { stage = .welcome; return }
-        let ps = backend.profiles.all
-        if ps.isEmpty { stage = .profiles; return }
+        var ps = backend.profiles.all
+        if ps.isEmpty {                                       // nobody has to create a profile to start watching
+            backend.profiles.create(name: "Io", color: 0)
+            ps = backend.profiles.all
+        }
         if ps.count == 1, ps[0].pin.isEmpty { chooseProfile(ps[0].id); return }
-        if let a = backend.profiles.active, let p = backend.profiles.get(a), p.pin.isEmpty, ps.count == 1 { chooseProfile(p.id); return }
         stage = .profiles
     }
 
@@ -152,7 +152,6 @@ public final class AppModel: ObservableObject {
         profile = backend.profiles.get(id)
         stage = .main
         contentRevision += 1
-        if let p = profile, p.live.isEmpty && p.movies.isEmpty && p.series.isEmpty { setupProfile = p }
         let pid = id
         Task.detached { [backend] in _ = backend.syncPacks(pid) }
         refreshGuideIfStale(maxAgeHours: 6)
@@ -232,7 +231,7 @@ public final class AppModel: ObservableObject {
         backend.lib.save()
         reloadSources()
         refresh(added.id)
-        if stage == .welcome { stage = .profiles }
+        if stage == .welcome { decideStage() }
         return added
     }
 
@@ -378,7 +377,7 @@ public final class AppModel: ObservableObject {
         guideRefreshing = true
         let b = backend
         epgTask = Task { [weak self] in
-            await b.refreshEpg()
+            await b.refreshEpg(keys: b.guideKeys())
             self?.guideFinished()
         }
     }
@@ -447,7 +446,7 @@ public final class AppModel: ObservableObject {
             }
         }
         let hours = Int(backend.settings.get("epgEvery", "12")) ?? 12
-        if hours > 0, profiles.contains(where: { !$0.live.isEmpty }), nowMs - backend.epg.updated > Int64(hours) * 3600 * 1000 { refreshGuide(auto: true) }
+        if hours > 0, !sources.isEmpty, nowMs - backend.epg.updated > Int64(hours) * 3600 * 1000 { refreshGuide(auto: true) }
         Task.detached { [backend] in _ = backend.syncAllPacks() }
     }
 
@@ -508,8 +507,27 @@ public final class AppModel: ObservableObject {
         }
     }
 
+    /// A series from a banner: the episode the viewer stopped at, otherwise the first one.
+    public func watchSeries(_ card: Card) {
+        guard let p = profile else { return }
+        if p.resumeParent.values.contains(card.key) { resume(card); return }
+        Task { [weak self] in
+            guard let self = self, let d = try? await self.backend.seriesDetails(card.key) else { return }
+            let all = d.seasons.flatMap { $0.episodes }
+            if let first = all.first { self.play(.episode(ep: first, seriesKey: card.key, all: all, resume: 0)) }
+        }
+    }
+
+    /// A channel, and the channels to move through from the player: the given list, otherwise favourites and the main channels.
     public func playLive(_ key: String, among keys: [String]? = nil) {
-        play(.live(key: key, zap: keys ?? (profile?.live.array ?? [key])))
+        play(.live(key: key, zap: keys ?? defaultZap()))
+    }
+
+    private func defaultZap() -> [String] {
+        guard let p = profile else { return [] }
+        var seen = Set<String>()
+        let keys = (backend.channels(.favorites, profile: p) + backend.channels(.main, profile: p)).map { $0.key }.filter { seen.insert($0).inserted }
+        return keys.isEmpty ? backend.channels(.all, profile: p).map { $0.key } : keys
     }
 
     // MARK: messages

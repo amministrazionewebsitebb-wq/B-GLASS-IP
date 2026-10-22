@@ -7,20 +7,21 @@ ripensate per il tocco. Legge **liste M3U/M3U8** e **account Xtream Codes**; ogn
 > che parte dai sorgenti di B-Glass: la logica (parser, Xtream, pacchetti di canali, riconoscimento delle qualità, righe per genere, guida TV, profili) è stata
 > portata riga per riga e verificata con gli stessi test dell'originale; l'interfaccia e il player sono nuovi e nativi.
 
-## Cosa c'è dentro
+## Cosa c'è dentro (1.1)
+
+Pensata per il telefono: quattro schede, poche funzioni ma fatte bene, grafica scura in stile piattaforma di streaming.
 
 | | |
 |---|---|
-| **Home** | banner in evidenza, *Continua a guardare*, *Canali in onda ora* (con programma e avanzamento), *Film del momento*, *Serie TV del momento*, *Più votati*, avviso di scadenza dell'abbonamento |
-| **TV** | elenco canali con ora/prossimo programma, filtri (Tutti, Preferiti, per pacchetto/categoria), ricerca, preferiti, **guida TV a griglia** (8 ore) con dettaglio del programma |
-| **Film / Serie TV** | righe in stile Netflix (di tendenza, aggiunti di recente, più votati, *Perché hai guardato…*, una riga per genere anche con categorie dei fornitori diverse, poi le altre categorie); *Vedi tutto* a griglia con paginazione; pagina del titolo con trama, cast, stagioni ed episodi, *Riprendi / Dall'inizio* |
-| **Cerca** | dalla terza lettera, tra i tuoi contenuti o in tutta la lista; film e serie senza doppioni, canali con "aggiungi al profilo" |
-| **Profili** | "Chi guarda?", colori, PIN, profilo bambini (nasconde i contenuti per adulti), contenuti, preferiti, cronologia e punti di ripresa separati |
-| **Scelta contenuti** | **pacchetti consigliati** (Intrattenimento, Sport, Cinema, Documentari, News, Bambini, Musica, Radio…) che trovano i canali per nome nella lista; oppure categoria per categoria con ricerca e selezione in blocco; riordino dei canali |
-| **Player** | AVPlayer (HLS, MP4) con **Picture in Picture**, **AirPlay**, comandi in blocco schermo, audio in background; zapping con scorrimento su/giù, lista canali, **qualità del canale** (SD/HD/Full HD/4K, riconosciute dalla lista), audio e sottotitoli, adatta/riempi, velocità, timer di spegnimento, doppio tocco ±10 s, riconnessione automatica (e formato HLS/TS alternativo), prossimo episodio automatico, ripresa dal punto in cui eri |
-| **VLC (opzionale)** | secondo motore per ciò che Apple non riproduce: **MKV, AVI, MPEG-TS grezzo**. Entra nella build se `with_vlc` è attivo |
-| **Impostazioni** | liste (aggiorna, modifica, elimina, avanzamento), abbonamento (scadenza e connessioni), guida TV, motore/buffer/lingue/PiP, **speed test** con giudizio e formati sostenibili, rete e dispositivo, modalità esperto con PIN |
-| **Avvio rapido** | a tappe come su Android: prima le liste, poi i canali, per ultimi film e serie (anche 100.000 titoli) |
+| **Home** | vetrina che scorre da sola (film e serie con *Guarda* e *La mia lista*), *In onda ora* (preferiti e canali principali), *Continua a guardare*, *La mia lista*, film e serie del momento |
+| **TV** | *Principali* (Rai, Mediaset, Sky, La7… riconosciuti da soli nella lista), *Preferiti*, *Tutti*, *Categorie*; ogni canale con programma in onda, avanzamento e prossimo; ricerca; **Guida TV** a griglia |
+| **On Demand** | *Film* e *Serie TV* con vetrina, righe per genere e *Vedi tutto* a griglia; pagina del titolo con *Guarda / Riprendi*, *La mia lista*, trama, stagioni ed episodi |
+| **Cerca** | un'unica casella per canali, film e serie di tutta la lista, con le ricerche recenti |
+| **Player** | **in verticale**: video in alto, sotto il programma in onda e l'elenco dei canali (un tocco cambia canale); **in orizzontale**: schermo intero con una striscia di canali e i tasti canale precedente/successivo. Film ed episodi partono a schermo intero. Picture in Picture, AirPlay, audio in background, comandi in blocco schermo, audio e sottotitoli, qualità del canale, riconnessione automatica, prossimo episodio |
+| **VLC** | secondo lettore per ciò che Apple non riproduce (**MKV, AVI, MPEG-TS grezzo**): con *Lettore: Automatico* entra in gioco da solo |
+| **Impostazioni** | liste e abbonamento, profili (con PIN e profilo bambini), guida TV, lingua audio e sottotitoli, lettore, stabilità, contenuti per adulti con PIN, test della connessione |
+
+Non c'è più nulla da configurare dopo aver aggiunto la lista: tutto il catalogo è subito visibile (i contenuti per adulti restano nascosti).
 
 ## Come ottenere il file `.ipa`
 
@@ -29,6 +30,7 @@ L'IPA non si può compilare su un Mac senza Xcode, e firmarlo richiede un Apple 
 1. Crea un repository **privato** su GitHub e caricaci il contenuto di questa cartella (`BGlass/`).
 2. Vai su **Actions → Build IPA → Run workflow** (lascia `with_vlc` attivo).
 3. Quando ha finito (qualche minuto) scarica l'artefatto **BGlass-ipa**: dentro c'è `BGlass.ipa`, **non firmato**.
+   Le versioni con un tag (`v1.1.0`…) finiscono anche nelle **Releases** del repository, con il link diretto all'IPA.
    Se la build con VLC non riesce, il workflow rifà la build solo con AVPlayer e lo scrive nel riepilogo.
 4. Installalo sull'iPhone con **[Sideloadly](https://sideloadly.io)** o **[AltStore](https://altstore.io)** usando il tuo Apple ID: firmano l'app per te.
    Con un Apple ID gratuito l'app dura **7 giorni** e poi va reinstallata/rinnovata (AltStore lo fa da solo); con l'Apple Developer Program (99 €/anno) dura un anno
@@ -48,16 +50,15 @@ Oppure `xcodegen generate` e apri `BGlass.xcodeproj` in Xcode: scegli il tuo tea
 
 **Verificato su questo Mac**
 - Il *core* (`BGlassCore`: parser M3U e Xtream, JSON a flusso, gzip, XMLTV, guida, libreria su disco, profili, pacchetti, qualità, generi, righe, ricerca, speed test) con
-  **1.306 controlli** (`scripts/check.sh`): i test JUnit dell'app Android su parser, libreria, generi, pacchetti di canali e qualità portati in Swift (compreso il riconoscimento dei canali in 8 stili di nomi internazionali: 286/286)
+  **1.324 controlli** (`scripts/check.sh`): i test JUnit dell'app Android su parser, libreria, generi, pacchetti di canali e qualità portati in Swift (compreso il riconoscimento dei canali in 8 stili di nomi internazionali: 286/286)
   più un **server HTTP finto** che si comporta da pannello Xtream (account, cataloghi, EPG gzip, M3U e M3U.gz, errori di credenziali, 404, riavvio dell'app)
   e una prova di **scala** con 106.000 titoli (2.000 canali, 98.000 film, 6.000 serie), anche in build non ottimizzata: canali pronti in ~20 ms, caricamento completo ~1,2 s,
   prime righe dei film ~0,7 s, ricerca ~0,3 s.
 - L'intero codice dell'interfaccia e del player passa il **type-check contro le API di iOS** (target Mac Catalyst dell'SDK) e contro macOS (`scripts/typecheck.sh`).
-- Le schermate sono state **disegnate e controllate a occhio** con dati finti (`scripts/preview.sh`): home, TV, guida, film, serie, dettagli, profili, impostazioni, scelta dei contenuti, pacchetti, PIN, player.
+- Le schermate sono state **disegnate e controllate a occhio** con dati finti (`scripts/preview.sh`): home, TV, guida, On Demand, dettagli, cerca, impostazioni, PIN, player in verticale e in orizzontale.
 
 **NON verificato**
-- Mai compilato con Xcode e mai eseguito su un iPhone o sul simulatore (qui non c'è Xcode). Il **primo build in cloud potrebbe quindi richiedere una piccola correzione**:
-  se fallisce, apri il log del workflow e mandamelo.
+- Qui non c'è Xcode: la compilazione vera avviene su GitHub Actions; l'app non è mai stata eseguita sul simulatore.
 - Non provato con un fornitore reale: il comportamento di Picture in Picture, AirPlay, audio in background e VLC è scritto secondo la documentazione ma va provato sul dispositivo.
 - `project.yml` (XcodeGen) è stato solo validato come YAML.
 
@@ -73,7 +74,7 @@ Oppure `xcodegen generate` e apri `BGlass.xcodeproj` in Xcode: scegli il tuo tea
 ## Grafica e licenze
 
 Colori e identità "glass" vengono da B-Glass; **non** sono stati usati i font né le immagini degli skin Enigma2 *Sky.NEW* / *Slyk Q* (senza licenza dichiarata) né marchi Sky:
-l'app usa il carattere di sistema e un'icona nuova. B-Glass è **solo un lettore**: non fornisce né include contenuti.
+l'app usa il carattere di sistema e un'icona nuova. Lo "stile Sky" è solo nell'impostazione (sfondo scuro, vetrina, righe, player con elenco canali), non nei marchi. B-Glass è **solo un lettore**: non fornisce né include contenuti.
 
 ## Struttura
 
@@ -92,7 +93,7 @@ scripts/                 check.sh, typecheck.sh, preview.sh, build_ipa.sh, make_
 ### Strumenti di sviluppo (bastano le Command Line Tools)
 
 ```bash
-scripts/check.sh                       # compila il core ed esegue i 1.306 controlli
+scripts/check.sh                       # compila il core ed esegue i 1.324 controlli
 scripts/typecheck.sh                   # type-check di core + UI contro iOS (Catalyst) e macOS
 scripts/preview.sh /tmp/shots home live guide detail_movie   # PNG delle schermate con dati finti
 ```

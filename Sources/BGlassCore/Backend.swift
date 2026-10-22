@@ -405,20 +405,20 @@ public final class Backend {
         return ns.substring(with: m.range(at: 1)) + "/xmltv.php?username=" + u + "&password=" + p
     }
 
-    public func refreshEpg(progress: ProgressFn? = nil) async {
+    /// Downloads the guide of the given channels (default: the channels the profiles picked).
+    public func refreshEpg(keys: [String]? = nil, progress: ProgressFn? = nil) async {
         let sn = lib.snap
         var ids: [Int: Set<String>] = [:]
         var names: [Int: Set<String>] = [:]
         var wantedItems: [Int: [Item]] = [:]
         var seen = Set<String>()
-        for pr in profiles.all {
-            for k in pr.live {
-                guard let it = sn.byKey[k], seen.insert(k).inserted else { continue }
-                if ids[it.src] == nil { ids[it.src] = []; names[it.src] = []; wantedItems[it.src] = [] }
-                if let e = it.epgId, !e.isEmpty { ids[it.src]!.insert(e.lowercased()) }
-                names[it.src]!.insert(Hash.norm(it.name))
-                wantedItems[it.src]!.append(it)
-            }
+        let wanted = keys ?? profiles.all.flatMap { $0.live.array }
+        for k in wanted {
+            guard let it = sn.byKey[k], seen.insert(k).inserted else { continue }
+            if ids[it.src] == nil { ids[it.src] = []; names[it.src] = []; wantedItems[it.src] = [] }
+            if let e = it.epgId, !e.isEmpty { ids[it.src]!.insert(e.lowercased()) }
+            names[it.src]!.insert(Hash.norm(it.name))
+            wantedItems[it.src]!.append(it)
         }
         let now = Int64(Date().timeIntervalSince1970)
         var step = 0
@@ -449,7 +449,7 @@ public final class Backend {
     private func shortEpgFill(_ s: Source, _ items: [Item]) async {
         let x = XtreamClient(s)
         let deadline = Date().addingTimeInterval(180)
-        let todo = items.filter { $0.sid != nil }
+        let todo = Array(items.filter { $0.sid != nil }.prefix(400))           // one request per channel: only the first ones
         var next = 0
         await withTaskGroup(of: Void.self) { group in
             func add() {

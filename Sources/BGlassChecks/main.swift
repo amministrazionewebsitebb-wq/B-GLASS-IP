@@ -9,6 +9,7 @@ runGenresChecks(h)
 runParserChecks(h)
 runPacksChecks(h)
 runVariantsChecks(h)
+runCatalogChecks(h)
 await runNetworkChecks(h)
 runScaleChecks(h)
 
