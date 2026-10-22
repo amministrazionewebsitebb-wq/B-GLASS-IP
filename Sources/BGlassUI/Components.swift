@@ -329,6 +329,7 @@ struct RailSkeleton: View {
 /// Shows a list that is still loading at the top of a screen.
 struct LoadingBanner: View {
     @EnvironmentObject var app: AppModel
+    @State private var editing: Source?
 
     var body: some View {
         let running = app.refreshes.filter { $0.value.running }
@@ -352,11 +353,16 @@ struct LoadingBanner: View {
                     Text(err).font(.system(size: 12)).foregroundStyle(Theme.secondaryText).lineLimit(3)
                 }
                 Spacer()
-                Button("Riprova") { app.refresh(id) }.font(.system(size: 14, weight: .semibold)).buttonStyle(.plain).foregroundStyle(Theme.cyan)
+                VStack(spacing: 10) {
+                    Button("Riprova") { app.refresh(id) }
+                    Button("Modifica") { editing = app.source(id) }
+                }
+                .font(.system(size: 14, weight: .semibold)).buttonStyle(.plain).foregroundStyle(Theme.cyan)
             }
             .padding(12)
             .glass(radius: 12)
             .padding(.horizontal, 16)
+            .sheet(item: $editing) { s in AddListView(editing: s) }
         }
     }
 }

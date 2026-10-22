@@ -11,6 +11,15 @@ public final class XtreamClient {
         public var activeConn = ""
         public var message = ""
         public var hls = false
+        /// The panel answered and said no (wrong user or password, expired, banned): looking elsewhere will not help.
+        public var rejected = false
+    }
+
+    /// A login that worked, and the way it worked.
+    public struct Found {
+        public var source: Source          // with the address, User-Agent and certificate option that the panel accepted
+        public var account: Account
+        public var note = ""               // what differs from what was typed, in words
     }
 
     public struct Episode {
@@ -106,6 +115,11 @@ public final class XtreamClient {
         return base + "/live/" + XtreamClient.enc(s.user) + "/" + XtreamClient.enc(s.pass) + "/" + sid + "." + f
     }
 
+    /// "http://host/user/pass/123": what older panels serve, with no format in the address.
+    public func plainLiveUrl(_ sid: String) -> String {
+        base + "/" + XtreamClient.enc(s.user) + "/" + XtreamClient.enc(s.pass) + "/" + sid
+    }
+
     public func movieUrl(_ sid: String, ext: String?) -> String {
         base + "/movie/" + XtreamClient.enc(s.user) + "/" + XtreamClient.enc(s.pass) + "/" + sid + "." + ((ext ?? "").isEmpty ? "mp4" : ext!)
     }
@@ -116,10 +130,11 @@ public final class XtreamClient {
 
     // MARK: json helpers
 
-    private func getJSON(_ url: String) async throws -> Any {
-        let d = try await Net.data(url, ua: s.ua, insecure: s.insecure)
-        do { return try JSONSerialization.jsonObject(with: d, options: [.fragmentsAllowed]) }
-        catch { throw NetError.invalid("Risposta non valida dal server") }
+    private func getJSON(_ url: String, timeout: TimeInterval? = nil) async throws -> Any {
+        let d = try await Net.data(url, ua: s.ua, insecure: s.insecure, timeout: timeout)
+        if let v = Lenient.json(d) { return v }
+        Diag.log("Risposta non JSON da \(Net.brief(url)): \(Lenient.describe(d))")
+        throw NetError.invalid("Il server non ha risposto come un pannello Xtream: ha mandato \(Lenient.describe(d)).")
     }
 
     static func str(_ v: Any?) -> String {
@@ -140,11 +155,16 @@ public final class XtreamClient {
 
     // MARK: account
 
-    public func auth() async throws -> Account {
-        let el = try await getJSON(api(nil))
+    public func auth(timeout: TimeInterval? = nil) async throws -> Account {
+        let el = try await getJSON(api(nil), timeout: timeout)
         var a = Account()
         guard let o = el as? [String: Any] else { a.message = "Risposta non valida"; return a }
-        guard let ui = o["user_info"] as? [String: Any] else { a.message = "Credenziali non valide"; return a }
+        guard let ui = o["user_info"] as? [String: Any] else {
+            // some panels answer {"user_info":[]} or {} to a wrong login, others an error text
+            if o["user_info"] != nil || o.isEmpty { a.rejected = true; a.message = "Utente o password non validi" }
+            else { a.message = "Risposta non valida" }
+            return a
+        }
         let auth = XtreamClient.str(ui["auth"])
         a.ok = auth == "1" || auth.lowercased() == "true"
         a.hls = XtreamClient.str(ui["allowed_output_formats"]).lowercased().contains("m3u8")
@@ -163,19 +183,99 @@ public final class XtreamClient {
         } else {
             a.expires = "illimitato"
         }
-        if !a.ok { a.message = a.status.isEmpty ? "Autenticazione rifiutata" : a.status }
+        let st = a.status.lowercased()
+        if a.ok && (st == "expired" || st == "banned" || st == "disabled") { a.ok = false }
+        if !a.ok {
+            a.rejected = true
+            switch st {
+            case "expired": a.message = "Abbonamento scaduto" + (a.expires.isEmpty || a.expires == "illimitato" ? "" : " il \(a.expires)")
+            case "banned", "disabled": a.message = "Account disattivato dal fornitore"
+            default: a.message = "Utente o password non validi"
+            }
+        }
         return a
+    }
+
+    // MARK: finding the way in
+
+    /// Ports Xtream panels commonly listen on, tried when the address as typed does not answer.
+    public static let commonPorts = [8080, 80, 25461, 8000, 8880, 2082, 2095, 8443, 443]
+
+    /// Logs in the way the panel wants it. First the address as typed; when the panel refuses the app (HTTP error, a web page instead
+    /// of JSON) the other User-Agents; when nothing answers there, the other scheme and the usual ports; a broken certificate is
+    /// accepted for that panel. A clear "no" from the panel (wrong password, expired) ends the search at once.
+    public static func discover(_ s: Source, ports: [Int] = commonPorts, budget: TimeInterval = 75) async throws -> Found {
+        let started = Date()
+        var bases = [normalizeBase(s.url)]
+        if let u = URLComponents(string: bases[0]), let host = u.host, let scheme = u.scheme {
+            func add(_ b: String) { if !b.isEmpty && !bases.contains(b) { bases.append(b) } }
+            add(normalizeBase("\(scheme == "https" ? "http" : "https")://\(host)\(u.port.map { ":\($0)" } ?? "")\(u.path)"))
+            for p in ports { add(normalizeBase("\(p == 443 || p == 8443 ? "https" : "http")://\(host):\(p)\(u.path)")) }
+        }
+        let uas = s.ua.isEmpty ? Net.userAgents : [s.ua]
+        var firstError: Error?
+        var refusedElsewhere: Found?                 // a "no" from another port: told only if nothing better turns up
+        for (bi, base) in bases.enumerated() {
+            var insecure = s.insecure
+            var ui = 0
+            while ui < uas.count {
+                if Date().timeIntervalSince(started) > budget { break }
+                try Task.checkCancellation()
+                var t = s
+                t.url = base
+                t.ua = s.ua.isEmpty && ui == 0 ? "" : uas[ui]
+                t.insecure = insecure
+                do {
+                    let a = try await XtreamClient(t).auth(timeout: bi == 0 ? 25 : 8)
+                    if a.rejected && !a.ok && bi > 0 {
+                        refusedElsewhere = refusedElsewhere ?? Found(source: t, account: a)
+                        break
+                    }
+                    if a.ok || a.rejected {
+                        var notes: [String] = []
+                        if base != bases[0] { notes.append("il pannello risponde su \(Net.brief(base))") }
+                        if t.ua != s.ua { notes.append("accetta solo il riconoscimento «\(t.ua)»") }
+                        if t.insecure && !s.insecure { notes.append("ha un certificato HTTPS non valido") }
+                        let note = notes.joined(separator: ", ")
+                        Diag.log(a.ok ? "Accesso riuscito\(note.isEmpty ? "" : ": " + note)" : "Il pannello rifiuta l'accesso: \(a.message)")
+                        return Found(source: t, account: a, note: note)
+                    }
+                    if bi == 0 && firstError == nil { firstError = NetError.invalid("Il server ha risposto, ma non come un pannello Xtream.") }
+                    ui += 1                                                                    // JSON, but not a login: maybe it wants another app
+                } catch {
+                    if error is CancellationError { throw error }
+                    if bi == 0 && firstError == nil { firstError = error }
+                    if let u = error as? URLError {
+                        if u.code == .cannotFindHost || u.code == .dnsLookupFailed || u.code == .notConnectedToInternet { throw error }
+                        if certificateProblem(u), !insecure { insecure = true; continue }        // same address again, accepting the certificate
+                        break                                                                      // nothing that speaks HTTP here: next address
+                    }
+                    if case NetError.http(let c) = error, c == 404 || c == 410 { break }         // no panel at this address
+                    ui += 1                                                                        // refused or a web page: try as another app
+                }
+            }
+            if Date().timeIntervalSince(started) > budget { break }
+        }
+        if let r = refusedElsewhere { Diag.log("Il pannello su \(Net.brief(r.source.url)) rifiuta l'accesso: \(r.account.message)"); return r }
+        throw firstError ?? NetError.invalid("Il server non risponde")
+    }
+
+    static func certificateProblem(_ u: URLError) -> Bool {
+        [.serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid,
+         .secureConnectionFailed].contains(u.code)
     }
 
     // MARK: catalogues
 
-    private func categories(_ action: String) async throws -> [String: String] {
+    /// Category names by id. Best effort: a panel that fails here still has its catalogue (the names fall back to "Altro").
+    private func categories(_ action: String) async -> [String: String] {
         var m: [String: String] = [:]
-        if let arr = try await getJSON(api(action)) as? [Any] {
-            for e in arr {
-                guard let o = e as? [String: Any] else { continue }
-                m[XtreamClient.str(o["category_id"])] = XtreamClient.str(o["category_name"])
-            }
+        guard let v = try? await getJSON(api(action)) else { return m }
+        var list: [Any] = []
+        if let arr = v as? [Any] { list = arr } else if let obj = v as? [String: Any] { list = Array(obj.values) }
+        for e in list {
+            guard let o = e as? [String: Any] else { continue }
+            m[XtreamClient.str(o["category_id"])] = XtreamClient.str(o["category_name"])
         }
         return m
     }
@@ -195,7 +295,7 @@ public final class XtreamClient {
 
     @discardableResult
     public func loadLive(progress: ((Int) -> Void)? = nil, sink: (Item) -> Void) async throws -> Int {
-        let cats = try await categories("get_live_categories")
+        let cats = await categories("get_live_categories")
         var n = 0
         let src = s.id
         try await stream(api("get_live_streams"), keys: ["stream_id", "name", "category_id", "stream_icon", "epg_channel_id", "num"]) { f in
@@ -216,7 +316,7 @@ public final class XtreamClient {
 
     @discardableResult
     public func loadVod(progress: ((Int) -> Void)? = nil, sink: (Item) -> Void) async throws -> Int {
-        let cats = try await categories("get_vod_categories")
+        let cats = await categories("get_vod_categories")
         var n = 0
         let src = s.id
         try await stream(api("get_vod_streams"), keys: ["stream_id", "name", "category_id", "stream_icon", "container_extension", "added", "rating"]) { f in
@@ -239,7 +339,7 @@ public final class XtreamClient {
 
     @discardableResult
     public func loadSeries(progress: ((Int) -> Void)? = nil, sink: (Item) -> Void) async throws -> Int {
-        let cats = try await categories("get_series_categories")
+        let cats = await categories("get_series_categories")
         var n = 0
         let src = s.id
         try await stream(api("get_series"), keys: ["series_id", "name", "category_id", "cover", "last_modified", "releaseDate", "rating"]) { f in

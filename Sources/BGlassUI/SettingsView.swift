@@ -54,6 +54,7 @@ struct SettingsView: View {
                 Section {
                     NavigationLink { NetworkView() } label: { Label("Test della connessione", systemImage: "speedometer") }
                     NavigationLink { AboutView() } label: { Label("Informazioni", systemImage: "info.circle") }
+                    NavigationLink { DiagnosticsView() } label: { Label("Registro tecnico", systemImage: "doc.text.magnifyingglass") }
                 }
             }
             .groupedList()
@@ -321,6 +322,62 @@ enum NetInfo {
             out.append((label, ip))
         }
         return out
+    }
+}
+
+// MARK: technical log
+
+/// What the app asked the servers and what they answered (passwords hidden): to send when a list or a channel does not work.
+struct DiagnosticsView: View {
+    @EnvironmentObject var app: AppModel
+    @State private var text = ""
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Se una lista o un canale non funziona, copia questo registro e mandalo a chi ti assiste. Utenti e password sono nascosti.")
+                    .font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+                Text(text.isEmpty ? "Ancora niente: prova ad aggiornare la lista o ad aprire un canale." : text)
+                    .font(.system(size: 11, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(16)
+        }
+        .background(GlassBackground())
+        .navigationTitle("Registro tecnico")
+        .inlineTitle()
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { copy() } label: { Label("Copia", systemImage: "doc.on.doc") }
+                    ShareLink(item: report) { Label("Condividi", systemImage: "square.and.arrow.up") }
+                    Button(role: .destructive) { Diag.clear(); text = "" } label: { Label("Svuota", systemImage: "trash") }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
+        }
+        .onAppear { text = Diag.text }
+    }
+
+    private var report: String {
+        let v = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        var head = "B-Glass \(v) · lettore: \(Engines.vlcAvailable ? "AVPlayer + VLC" : "AVPlayer")\n"
+        for s in app.sources {
+            head += "Lista «\(s.name)»: \(s.type == .xtream ? "Xtream" : "M3U") \(Net.brief(Diag.mask(s.url))) · \(s.nLive) canali, \(s.nMovies) film, \(s.nSeries) serie"
+            head += s.ua.isEmpty ? "" : " · UA \(s.ua)"
+            head += s.status.isEmpty ? "\n" : " · \(s.status)\n"
+        }
+        return head + "\n" + Diag.text
+    }
+
+    private func copy() {
+        #if os(iOS)
+        UIPasteboard.general.string = report
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(report, forType: .string)
+        #endif
+        app.show("Registro copiato")
     }
 }
 

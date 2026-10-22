@@ -33,6 +33,7 @@ public enum M3UParser {
         var showOrder: [String] = []
         var cur: Item?
         var first = true
+        var pendUA: String?, pendRef: String?                                  // #EXTVLCOPT lines, wherever they sit around the entry
 
         try forEachLine(data) { raw in
             var line = raw
@@ -49,19 +50,25 @@ public enum M3UParser {
                     var a: [String: String] = [:]
                     attrs(b, 7, b.count, &a)
                     let e = a["url-tvg"] ?? a["x-tvg-url"] ?? a["tvg-url"]
-                    if let e = e, !e.trimmed.isEmpty { meta.epgUrl = e.trimmed }
+                    // several guides may be listed, separated by commas: the first one that is an address
+                    if let e = e?.split(separator: ",").map({ String($0).trimmed }).first(where: { $0.contains("://") }) { meta.epgUrl = e }
                 } else if line.hasPrefix("#EXTGRP:"), let c = cur {
                     if c.cat.isEmpty { c.cat = String(line.dropFirst(8)).trimmed }
-                } else if line.hasPrefix("#EXTVLCOPT:"), let c = cur {
+                } else if line.hasPrefix("#EXTVLCOPT:") {
                     let o = String(line.dropFirst(11))
-                    if let eq = o.firstIndex(of: "="), o.distance(from: o.startIndex, to: eq) > 0,
-                       o[o.startIndex..<eq].lowercased() == "http-user-agent" {
-                        c.ua = String(o[o.index(after: eq)...]).trimmed
+                    if let eq = o.firstIndex(of: "="), o.distance(from: o.startIndex, to: eq) > 0 {
+                        let k = o[o.startIndex..<eq].lowercased().trimmed, v = String(o[o.index(after: eq)...]).trimmed
+                        if k == "http-user-agent" { pendUA = v } else if k == "http-referrer" || k == "http-referer" { pendRef = v }
                     }
                 }
                 return
             }
+            // only addresses are entries: stray text (an HTML fragment, a note) is skipped without losing the #EXTINF before it
+            if !line.contains("://") { return }
             let item = cur ?? Item()
+            if let u = pendUA, !u.isEmpty { item.ua = u }
+            if let r = pendRef, !r.isEmpty, !line.contains("|") { line += "|Referer=" + r }       // kept with the address, read back when playing
+            pendUA = nil; pendRef = nil
             meta.count += 1
             if let tick = tick, meta.count % 5000 == 0 { try tick(meta.count) }
             let kind = kindOf(line, item)
@@ -178,7 +185,7 @@ public enum M3UParser {
     static func kindOf(_ url: String, _ cur: Item?) -> Kind {
         let k = kindOf(url)
         guard k == .live, let cur = cur else { return k }
-        let u = url.lowercased()
+        let u = address(url).lowercased()
         if u.contains("/live/") || u.contains(".m3u8") || u.contains(".ts") { return k }
         if isEpisodeName(cur.name) { return .episode }
         let g = cur.cat.trimmed.lowercased()
@@ -190,7 +197,7 @@ public enum M3UParser {
     }
 
     static func kindOf(_ url: String) -> Kind {
-        let u = url.lowercased()
+        let u = address(url).lowercased()
         if u.contains("/series/") { return .episode }
         if u.contains("/movie/") { return .movie }
         var path = Substring(u)
@@ -199,7 +206,35 @@ public enum M3UParser {
         return .live
     }
 
+    /// The address without the Kodi-style headers some lists append ("http://host/x.m3u8|User-Agent=…&Referer=…").
+    public static func address(_ line: String) -> String {
+        guard let bar = line.firstIndex(of: "|") else { return line }
+        return String(line[line.startIndex..<bar])
+    }
+
+    /// The headers of a Kodi-style entry: "|User-Agent=Foo&Referer=http%3A%2F%2Fsite" -> ["User-Agent": "Foo", "Referer": "http://site"].
+    public static func headers(_ line: String) -> [String: String] {
+        guard let bar = line.firstIndex(of: "|") else { return [:] }
+        var out: [String: String] = [:]
+        for kv in line[line.index(after: bar)...].split(separator: "&") {
+            guard let eq = kv.firstIndex(of: "="), eq != kv.startIndex else { continue }
+            var k = String(kv[kv.startIndex..<eq]).trimmed
+            let raw = String(kv[kv.index(after: eq)...])
+            let v = (raw.removingPercentEncoding ?? raw).trimmed
+            switch k.lowercased() {
+            case "user-agent", "useragent", "http-user-agent": k = "User-Agent"
+            case "referer", "referrer", "http-referrer", "http-referer": k = "Referer"
+            case "origin": k = "Origin"
+            case "cookie": k = "Cookie"
+            default: break
+            }
+            if !v.isEmpty { out[k] = v }
+        }
+        return out
+    }
+
     private static func lastSegment(_ url: String) -> String {
+        let url = address(url)
         var p = Substring(url)
         if let q = url.firstIndex(of: "?"), q != url.startIndex { p = url[url.startIndex..<q] }
         if let s = p.lastIndex(of: "/") { return String(p[p.index(after: s)...]) }
@@ -211,12 +246,13 @@ public enum M3UParser {
         let b = Array(line.utf8)
         let start = min(8, b.count)                                    // after "#EXTINF:"
         var comma = -1
-        var q = false
+        var quote: UInt8 = 0
         var i = start
         while i < b.count {
             let c = b[i]
-            if c == 34 { q.toggle() }
-            else if c == 44 && !q { comma = i; break }
+            if quote == 0 && (c == 34 || (c == 39 && i > 0 && b[i - 1] == 61)) { quote = c }      // "…" or ='…'
+            else if quote != 0 && c == quote { quote = 0 }
+            else if c == 44 && quote == 0 { comma = i; break }
             i += 1
         }
         let headEnd = comma < 0 ? b.count : comma
@@ -246,9 +282,10 @@ public enum M3UParser {
             let key = String(decoding: s[ks..<i], as: UTF8.self).lowercased()
             i += 1
             var val: String
-            if i < to && s[i] == 34 {
+            if i < to && (s[i] == 34 || s[i] == 39) {
+                let quote = s[i]
                 var ve = i + 1
-                while ve < s.count && s[ve] != 34 { ve += 1 }
+                while ve < s.count && s[ve] != quote { ve += 1 }
                 if ve >= s.count || ve > to { ve = to }
                 val = String(decoding: s[(i + 1)..<max(i + 1, ve)], as: UTF8.self)
                 i = ve + 1
@@ -279,7 +316,7 @@ public enum M3UParser {
                 var a = a, z = z
                 while a < z && p[a] <= 32 { a += 1 }
                 while z > a && p[z - 1] <= 32 { z -= 1 }
-                if z > a { try body(String(decoding: UnsafeBufferPointer(rebasing: p[a..<z]), as: UTF8.self)) }
+                if z > a { try body(Lenient.text(UnsafeBufferPointer(rebasing: p[a..<z]))) }
             }
             while i < n {
                 let c = p[i]

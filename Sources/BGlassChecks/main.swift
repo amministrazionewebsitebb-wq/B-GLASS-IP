@@ -11,6 +11,7 @@ runPacksChecks(h)
 runVariantsChecks(h)
 runCatalogChecks(h)
 await runNetworkChecks(h)
+await runProviderChecks(h)
 runScaleChecks(h)
 
 exit(h.summary())

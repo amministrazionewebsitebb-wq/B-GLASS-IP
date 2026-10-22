@@ -9,6 +9,8 @@ public enum FlatJSON {
     }
 
     /// `keys`: when given, only these keys are materialised (the rest of each object is skipped cheaply).
+    /// Tolerant of what real panels send: junk before the array (PHP notices), "null" or nothing for an empty catalogue, Latin-1
+    /// text. A download cut short still fails (the caller tries again), so a partial catalogue never replaces a whole one.
     public static func forEachObject(in data: Data, keys: Set<String>? = nil, _ body: ([String: String]) throws -> Void) throws {
         try data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
             var p = Parser(buf: raw.bindMemory(to: UInt8.self), keys: keys)
@@ -29,7 +31,19 @@ public enum FlatJSON {
         mutating func run(_ body: ([String: String]) throws -> Void) throws {
             if n >= 3 && buf[0] == 0xEF && buf[1] == 0xBB && buf[2] == 0xBF { i = 3 }
             ws()
-            guard i < n else { throw Malformed() }
+            guard i < n else { return }                                    // an empty answer: an empty catalogue
+            if buf[i] == 110 || buf[i] == 102 {                            // "null" / "false": nothing in it
+                var j = i
+                while j < n, buf[j] > 32 { j += 1 }
+                let word = String(decoding: UnsafeBufferPointer(rebasing: buf[i..<j]), as: UTF8.self)
+                if word == "null" || word == "false" { return }
+            }
+            if buf[i] != 91 && buf[i] != 123 {                             // notices printed before the data
+                var j = i
+                let limit = min(n, i + 65536)
+                while j < limit, buf[j] != 91, buf[j] != 123 { j += 1 }
+                if j < limit { i = j }
+            }
             if buf[i] == 91 {                                              // '['
                 i += 1
                 ws()
@@ -163,7 +177,7 @@ public enum FlatJSON {
             }
             guard i < n else { throw Malformed() }
             if !escaped {
-                let str = String(decoding: UnsafeBufferPointer(rebasing: buf[s..<i]), as: UTF8.self)
+                let str = Lenient.text(UnsafeBufferPointer(rebasing: buf[s..<i]))
                 i += 1
                 return str
             }
@@ -201,7 +215,7 @@ public enum FlatJSON {
             }
             j = end
             i = j + 1
-            return String(decoding: out, as: UTF8.self)
+            return Lenient.text(out)
         }
     }
 }

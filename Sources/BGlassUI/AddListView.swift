@@ -27,6 +27,7 @@ public struct AddListView: View {
     @State private var result: (ok: Bool, text: String)?
     @State private var duplicateAsk = false
     @State private var pasted: String?
+    @State private var checkFailed = false
 
     public init(editing: Source? = nil, onAdded: ((Source) -> Void)? = nil) {
         self.editing = editing
@@ -86,7 +87,15 @@ public struct AddListView: View {
                         .tint(.white)
                         .padding(14).glass(radius: 20)
 
-                        if let r = result {
+                        if busy {
+                            HStack(spacing: 10) {
+                                ProgressView().tint(.white)
+                                Text("Controllo la lista… se il server è particolare provo da solo altre impostazioni, può volerci un minuto.")
+                                    .font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(14).glass(radius: 16)
+                        } else if let r = result {
                             Label(r.text, systemImage: r.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                                 .font(.system(size: 14, weight: .medium))
                                 .foregroundStyle(r.ok ? Theme.cyan : Theme.gold)
@@ -95,14 +104,19 @@ public struct AddListView: View {
                         }
 
                         VStack(spacing: 10) {
-                            Button { Task { await test() } } label: {
-                                HStack { if busy { ProgressView().tint(.white) }; Text("Verifica i dati") }.frame(maxWidth: .infinity)
-                            }
-                            .buttonStyle(GlassButtonStyle())
-                            .disabled(busy || !canSubmit)
                             Button { submit() } label: { Text(editing == nil ? "Aggiungi la lista" : "Salva e aggiorna").frame(maxWidth: .infinity) }
                                 .buttonStyle(GlassButtonStyle(prominent: true))
                                 .disabled(busy || !canSubmit)
+                            if checkFailed {
+                                // the check can be wrong (a panel that only answers players): let the person try anyway
+                                Button { commit(build()) } label: { Text("Aggiungi comunque").frame(maxWidth: .infinity) }
+                                    .buttonStyle(GlassButtonStyle())
+                                    .disabled(busy || !canSubmit)
+                            } else {
+                                Button { Task { await test() } } label: { Text("Verifica soltanto").frame(maxWidth: .infinity) }
+                                    .buttonStyle(GlassButtonStyle())
+                                    .disabled(busy || !canSubmit)
+                            }
                         }
 
                         Text("B-Glass è solo un lettore: non fornisce né include canali, film o serie. Usa la lista del tuo provider.")
@@ -115,7 +129,7 @@ public struct AddListView: View {
             .inlineTitle()
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Annulla") { dismiss() } } }
             .alert("Lista già presente", isPresented: $duplicateAsk) {
-                Button("Aggiungi lo stesso") { commit() }
+                Button("Aggiungi lo stesso") { Task { await verifyAndCommit() } }
                 Button("Annulla", role: .cancel) {}
             } message: { Text("Hai già aggiunto questo account: canali e film risulterebbero doppi.") }
         }
@@ -177,7 +191,7 @@ public struct AddListView: View {
     private func build() -> Source {
         var s = editing ?? Source()
         s.type = type
-        if type == .xtream { s.url = XtreamClient.normalizeBase(server); s.user = user.trimmed; s.pass = pass } else { s.url = m3u.trimmed; s.user = ""; s.pass = "" }
+        if type == .xtream { s.url = XtreamClient.normalizeBase(server); s.user = user.trimmed; s.pass = pass.trimmingCharacters(in: .whitespacesAndNewlines) } else { s.url = m3u.trimmed; s.user = ""; s.pass = "" }
         s.ua = ua.trimmed; s.epgUrl = epgUrl.trimmed; s.insecure = insecure
         s.wantLive = wantLive; s.wantMovies = wantMovies; s.wantSeries = wantSeries
         s.liveFmt = liveFmt; s.fmtVer = 2
@@ -187,27 +201,42 @@ public struct AddListView: View {
         return s
     }
 
-    private func test() async {
+    /// Checks the list and copies into the form what had to change for it to work (port, User-Agent, certificate).
+    @discardableResult
+    private func test() async -> Source? {
         busy = true
         result = nil
-        let s = build()
+        defer { busy = false }
         do {
-            let msg = try await app.backend.test(s)
-            result = (true, msg)
+            let c = try await app.backend.check(build())
+            result = (true, c.summary)
+            checkFailed = false
+            if c.source.type == .xtream { server = c.source.url }
+            ua = c.source.ua
+            insecure = c.source.insecure
+            return c.source
         } catch {
             result = (false, Net.explain(error))
+            checkFailed = true
+            return nil
         }
-        busy = false
     }
 
     private func submit() {
         let s = build()
         if editing == nil, app.sources.contains(where: { $0.type == s.type && $0.url == s.url && $0.user == s.user }) { duplicateAsk = true; return }
-        commit()
+        Task { await verifyAndCommit() }
     }
 
-    private func commit() {
-        let s = build()
+    /// The list is added only once it answers, so a mistake shows here, where it can be corrected, not later as an empty home page.
+    private func verifyAndCommit() async {
+        guard let ok = await test() else { return }
+        var s = build()
+        s.url = ok.url; s.ua = ok.ua; s.insecure = ok.insecure
+        commit(s)
+    }
+
+    private func commit(_ s: Source) {
         if editing != nil {
             app.updateSource(s)
             dismiss()

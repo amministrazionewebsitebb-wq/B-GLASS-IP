@@ -18,8 +18,11 @@ public typealias ProgressFn = (_ phase: String, _ done: Int, _ total: Int) -> Vo
 public struct Play: Sendable {
     public var url = ""
     public var ua = ""
-    public var alt: String?             // the same channel in the other live format, tried after repeated stalls
+    /// The same channel in other forms (the other live format, the address without one), tried in turn when it does not play.
+    public var alts: [String] = []
+    public var alt: String? { alts.first }
     public var insecure = false
+    public var headers: [String: String] = [:]     // Referer, Origin, Cookie a list asks for (the User-Agent is `ua`)
 }
 
 /// Everything that is not UI or player: sources, profiles, library, guide.
@@ -83,19 +86,73 @@ public final class Backend {
         return a
     }
 
-    /// Validates a source without storing anything. Returns a human readable summary.
-    public func test(_ s: Source) async throws -> String {
+    /// The result of checking a list before it is added: what to tell the person, and the list as it actually works
+    /// (another port, User-Agent or certificate option may have been needed).
+    public struct Checked: Sendable {
+        public var source: Source
+        public var summary: String
+    }
+
+    /// Validates a source without storing anything.
+    public func check(_ s: Source) async throws -> Checked {
+        Diag.secret(s.user, s.pass)
         if s.type == .xtream {
-            let a = try await XtreamClient(s).auth()
-            if !a.ok { throw BackendError.message(a.message.isEmpty ? "Credenziali non valide" : a.message) }
-            return "Account " + (a.status.isEmpty ? "attivo" : a.status.lowercased()) + " - scade: " + a.expires
-                + (a.maxConn.isEmpty ? "" : " - connessioni: " + a.maxConn)
+            let f = try await XtreamClient.discover(s)
+            let a = f.account
+            if !a.ok { throw BackendError.message(a.message.isEmpty ? "Utente o password non validi" : a.message) }
+            var text = "Account " + (a.status.isEmpty ? "attivo" : a.status.lowercased()) + " · scade: " + a.expires
+                + (a.maxConn.isEmpty ? "" : " · connessioni: " + a.maxConn)
+            if !f.note.isEmpty { text += "\nSistemato da solo: " + f.note + "." }
+            return Checked(source: f.source, summary: text)
         }
-        let head = try await Net.peek(s.url, ua: s.ua, insecure: s.insecure)
-        if Gzip.isGzip(head) { return "Lista M3U (compressa) raggiungibile" }
-        let text = String(decoding: head, as: UTF8.self)
-        if !text.contains("#EXTM3U") && !text.contains("#EXTINF") { throw BackendError.message("Il link non sembra una lista M3U") }
-        return "Lista M3U raggiungibile"
+        let (t, head) = try await probeList(s)
+        var text = Gzip.isGzip(head) ? "Lista M3U (compressa) raggiungibile" : "Lista M3U raggiungibile"
+        if t.ua != s.ua { text += "\nSistemato da solo: il server accetta solo il riconoscimento «\(t.ua)»." }
+        if t.insecure && !s.insecure { text += "\nSistemato da solo: certificato HTTPS non valido accettato." }
+        return Checked(source: t, summary: text)
+    }
+
+    /// Kept for callers that only want the words.
+    public func test(_ s: Source) async throws -> String { try await check(s).summary }
+
+    /// True when the first bytes look like a playlist (extended M3U, or a plain list of addresses), not a web page or an error.
+    static func looksLikePlaylist(_ head: Data) -> Bool {
+        if Gzip.isGzip(head) { return true }
+        if Lenient.isHTML(head) { return false }
+        let t = Lenient.text(head.prefix(65536))
+        if t.contains("#EXTM3U") || t.contains("#EXTINF") { return true }
+        return t.split(whereSeparator: { $0 == "\n" || $0 == "\r" }).prefix(20).contains { $0.contains("://") }
+    }
+
+    /// Opens an M3U link the way its host wants: as typed, then as the other usual players when the host refuses (HTTP error or
+    /// a web page), accepting a broken certificate when that is the only problem. Returns the working settings and the first bytes.
+    func probeList(_ s: Source) async throws -> (Source, Data) {
+        let uas = s.ua.isEmpty ? Net.userAgents : [s.ua]
+        var firstError: Error?
+        var insecure = s.insecure
+        var i = 0
+        while i < uas.count {
+            try Task.checkCancellation()
+            var t = s
+            t.ua = s.ua.isEmpty && i == 0 ? "" : uas[i]
+            t.insecure = insecure
+            do {
+                let head = try await Net.peek(t.url, ua: t.ua, insecure: t.insecure, bytes: 4096)
+                if Backend.looksLikePlaylist(head) { return (t, head) }
+                firstError = firstError ?? BackendError.message("Il link non porta a una lista M3U: il server ha mandato \(Lenient.describe(head)).")
+                i += 1
+            } catch {
+                if error is CancellationError { throw error }
+                firstError = firstError ?? error
+                if let u = error as? URLError {
+                    if XtreamClient.certificateProblem(u), !insecure { insecure = true; continue }
+                    break                                                         // unreachable: another name will not help
+                }
+                if case NetError.http(let c) = error, c == 404 || c == 410 { break }
+                i += 1
+            }
+        }
+        throw firstError ?? BackendError.message("Il link non risponde")
     }
 
     private let cancelLock = NSLock()
@@ -127,6 +184,8 @@ public final class Backend {
     /// `liveOnly`: reload just the channel list of an Xtream source (a second or two) and leave movies/series untouched.
     public func refreshSource(_ id: Int, liveOnly: Bool = false, progress: ProgressFn? = nil) async throws {
         guard let s = lib.source(id) else { throw BackendError.message("Sorgente inesistente") }
+        Diag.secret(s.user, s.pass)
+        Diag.log("Aggiorno «\(s.name)» (\(s.type == .xtream ? "Xtream" : "M3U"))")
         clearCancel(id)
         defer { clearCancel(id) }
         if s.type == .xtream { try await refreshXtream(s, liveOnly: liveOnly, progress: progress) }
@@ -135,28 +194,33 @@ public final class Backend {
 
     private func refreshXtream(_ s: Source, liveOnly: Bool, progress: ProgressFn?) async throws {
         let id = s.id
-        let x = XtreamClient(s)
         progress?("auth", 0, 0)
-        var acc = XtreamClient.Account()
+        var found: XtreamClient.Found?
         var attempt = 0
-        while true {                                    // a busy panel times out or answers garbage now and then: try again before failing
+        while found == nil {                            // a busy panel times out now and then: try again before failing
             attempt += 1
             do {
-                acc = try await x.auth()
-                if acc.ok || attempt >= 3 || acc.message != "Risposta non valida" { break }
-                try check(id)
-                try await pause(Double(attempt) * 2)
-                try check(id)
+                let f = try await XtreamClient.discover(s)
+                if f.account.ok || f.account.rejected || attempt >= 2 { found = f; break }
             } catch {
-                if isCancel(error) || attempt >= 3 { throw error }
-                try check(id)
-                try await pause(Double(attempt) * 2)
-                try check(id)
+                if isCancel(error) || attempt >= 2 { throw error }
+                if let u = error as? URLError, u.code == .cannotFindHost || u.code == .notConnectedToInternet { throw error }
             }
+            try check(id)
+            try await pause(Double(attempt) * 2)
+            try check(id)
         }
         try check(id)
-        if !acc.ok { throw BackendError.message(acc.message.isEmpty ? "Credenziali non valide" : acc.message) }
-        lib.mutateSource(id) { $0.expires = acc.expires; $0.expTs = acc.expTs; $0.activeConn = acc.activeConn; $0.maxConn = acc.maxConn; $0.hls = acc.hls; $0.fmtChecked = true }
+        let acc = found!.account
+        if !acc.ok { throw BackendError.message(acc.message.isEmpty ? "Utente o password non validi" : acc.message) }
+        // the way in that worked (another port, User-Agent, certificate) is kept for the next time and for playing
+        let way = found!.source
+        lib.mutateSource(id) {
+            $0.url = way.url; $0.ua = way.ua; $0.insecure = way.insecure
+            $0.expires = acc.expires; $0.expTs = acc.expTs; $0.activeConn = acc.activeConn; $0.maxConn = acc.maxConn; $0.hls = acc.hls; $0.fmtChecked = true
+        }
+        let x = XtreamClient(lib.source(id) ?? way)
+        let before = lib.source(id) ?? s
 
         // The three catalogues download separately and are published as soon as each is ready: the channels (a few hundred KB)
         // are usable long before the 100k movies finish.
@@ -191,6 +255,9 @@ public final class Backend {
                 }
             }
             try check(id)
+            // an empty answer where there were channels is a hiccup of the panel, not an empty list: keep what we had
+            let had = kind == .live ? before.nLive : kind == .movie ? before.nMovies : before.nSeries
+            if n == 0 && had > 0 { throw BackendError.message("Il server ha mandato un elenco vuoto") }
             let remap = lib.replaceKinds(id, kinds: [kind], list, wanted: wanted)
             if !remap.isEmpty { profiles.updateAll { $0.remapKeys(remap) } }
             lib.mutateSource(id) { src in
@@ -250,6 +317,7 @@ public final class Backend {
     }
 
     private func refreshM3U(_ s: Source, progress: ProgressFn?) async throws {
+        var s = s
         let id = s.id
         progress?("m3u", 0, 0)
         var items: [Item] = []
@@ -261,11 +329,26 @@ public final class Backend {
             do {
                 items.removeAll(keepingCapacity: true)
                 kinds = [0, 0, 0, 0]
+                if attempt == 1 {
+                    // how the host wants to be asked (User-Agent, certificate); remembered on the list when it differs
+                    let (t, _) = try await probeList(s)
+                    if t.ua != s.ua || t.insecure != s.insecure {
+                        lib.mutateSource(id) { $0.ua = t.ua; $0.insecure = t.insecure }
+                        s = lib.source(id) ?? t
+                    }
+                }
                 let file = try await Net.download(s.url, ua: s.ua, insecure: s.insecure) { got, total in
                     progress?("m3u", 0, total > 0 ? Int(min(99, got * 100 / total)) : -1)
                 }
                 defer { try? FileManager.default.removeItem(at: file) }
                 let data = try Data(contentsOf: file, options: .alwaysMapped)
+                if Backend.isStreamPlaylist(data) {
+                    // the link is one channel (an HLS playlist), not a list of channels
+                    let it = Item(src: id, kind: .live, key: "\(id):l:\(Hash.fnv(s.url))", name: s.name, cat: "Canali")
+                    it.setUrl(s.url, prefixes: nil)
+                    items = [it]; kinds[Kind.live.rawValue] = 1
+                    break
+                }
                 meta = try M3UParser.parse(data: data, srcId: id, wantLive: s.wantLive, wantMovies: s.wantMovies, wantSeries: s.wantSeries, tick: { n in
                     try self.check(id)
                     progress?("m3u", n, -1)
@@ -282,7 +365,10 @@ public final class Backend {
             }
         }
         try check(id)
-        if items.isEmpty { throw BackendError.message("Nessun contenuto trovato nella sorgente") }
+        if items.isEmpty {
+            throw BackendError.message(meta.count == 0 ? "La lista non contiene canali, film o serie (nessun indirizzo trovato)." : "Nessun contenuto trovato nella sorgente")
+        }
+        Diag.log("Lista letta: \(kinds[0]) canali, \(kinds[1]) film, \(kinds[2]) serie")
         progress?("index", items.count, 0)
         let remap = lib.replaceSource(id, items, wanted: wantedKeys())
         if !remap.isEmpty { profiles.updateAll { $0.remapKeys(remap) } }
@@ -487,17 +573,29 @@ public final class Backend {
         }
     }
 
+    /// True when the data is a single HLS stream (a channel), not an IPTV list.
+    static func isStreamPlaylist(_ d: Data) -> Bool {
+        let t = Lenient.text(d.prefix(8192))
+        return t.contains("#EXTM3U") && (t.contains("#EXT-X-STREAM-INF") || t.contains("#EXT-X-TARGETDURATION")) && !t.contains("#EXTINF:-1")
+    }
+
     public func resolve(_ it: Item) async -> Play? {
         let s = lib.source(it.src)
         var p = Play()
-        if let s = s { p.ua = s.ua; p.insecure = s.insecure }
+        if let s = s { p.ua = s.ua; p.insecure = s.insecure; Diag.secret(s.user, s.pass) }
         if let u = it.ua, !u.isEmpty { p.ua = u }
-        if let direct = it.url {
+        if let line = it.url {
+            // Kodi-style headers after "|" belong to the request, not to the address
+            let direct = M3UParser.address(line)
+            var h = M3UParser.headers(line)
+            if let ua = h.removeValue(forKey: "User-Agent") { p.ua = ua }
+            p.headers = h
             p.url = direct
             if it.kind == .live {          // Xtream-style "http://host/user/pass/123": the HLS twin is /live/user/pass/123.m3u8
                 let ns = direct as NSString
                 if let m = Backend.plainStream.firstMatch(in: direct, range: NSRange(location: 0, length: ns.length)) {
-                    p.alt = "\(ns.substring(with: m.range(at: 1)))/live/\(ns.substring(with: m.range(at: 2)))/\(ns.substring(with: m.range(at: 3)))/\(ns.substring(with: m.range(at: 4))).m3u8"
+                    let live = "\(ns.substring(with: m.range(at: 1)))/live/\(ns.substring(with: m.range(at: 2)))/\(ns.substring(with: m.range(at: 3)))/\(ns.substring(with: m.range(at: 4)))"
+                    p.alts = [live + ".m3u8", live + ".ts"]
                 }
             }
             return p
@@ -511,8 +609,8 @@ public final class Backend {
         switch it.kind {
         case .live:
             p.url = x.liveUrl(sid)
-            let other = p.url.hasSuffix(".m3u8") ? "ts" : "m3u8"
-            if other == "ts" || s.hls || s.liveFmt != "auto" { p.alt = x.liveUrl(sid, fmt: other) }
+            // the other format of the same channel (many panels serve both even when they declare one), then the old style address
+            p.alts = [x.liveUrl(sid, fmt: p.url.hasSuffix(".m3u8") ? "ts" : "m3u8"), x.plainLiveUrl(sid)]
         case .movie: p.url = x.movieUrl(sid, ext: it.ext)
         case .episode: p.url = x.episodeUrl(sid, ext: it.ext)
         case .series: return nil

@@ -55,12 +55,17 @@ public final class PlayerModel: ObservableObject {
     private var engineId = "av"
     private var zapKeys: [String] = []
     private var play: Play?
-    private var usedAlt = false
+    /// Which address of the channel is in use: 0 the main one, then its other forms (`Play.alts`).
+    private var urlIndex = 0
+    private var playingSrc = -1
+    /// Per list, the form of address that last played: the next channel of the same list starts with it (in-memory, this session).
+    private static var workingForm: [Int: Int] = [:]
     private var attempts = 0
     private var generation = 0
     private var playingSince: Date?
     private var stallSince: Date?
     private var forceVLC = false
+    private var forceAV = false
     private var tickTask: Task<Void, Never>?
     private var hideTask: Task<Void, Never>?
     private var retryTask: Task<Void, Never>?
@@ -172,8 +177,9 @@ public final class PlayerModel: ObservableObject {
         let pref = app.setting("engine", "auto")
         var vlc = false
         if Engines.vlcAvailable {
-            if pref == "vlc" || forceVLC { vlc = true }
-            else if pref == "auto" && Engines.needsVLC(url, live: live) { vlc = true }
+            if Engines.needsVLC(url, live: live) { vlc = true }                     // Apple's player cannot read it at all
+            else if forceAV { vlc = false }
+            else if pref == "vlc" || forceVLC { vlc = true }
         }
         let want = vlc ? "vlc" : "av"
         if want == engineId { return }
@@ -192,9 +198,9 @@ public final class PlayerModel: ObservableObject {
     public func switchEngine() {
         guard Engines.vlcAvailable, let p = play else { return }
         forceVLC = engineId == "av"
-        if engineId == "vlc" { forceVLC = false }
+        forceAV = engineId == "vlc"
         attempts = 0
-        load(p, at: isLive ? 0 : positionMs)
+        load(p, url: currentURL(p), at: isLive ? 0 : positionMs)
     }
 
     private func load(_ p: Play, url override: String? = nil, at startMs: Int64) {
@@ -214,11 +220,12 @@ public final class PlayerModel: ObservableObject {
         default: seconds = 40
         }
         phase = .loading
-        stallSince = nil
+        stallSince = Date()                                     // a stream that never starts counts as stalled too
         frozenSince = nil
         lastTickPos = -1
         langApplied = false
-        engine.load(EngineRequest(url: url, userAgent: p.ua.isEmpty ? Net.defaultUA : p.ua, live: isLive, startAtMs: startMs, bufferSeconds: seconds))
+        engine.load(EngineRequest(url: url, userAgent: p.ua.isEmpty ? Net.defaultUA : p.ua, headers: p.headers, live: isLive, startAtMs: startMs, bufferSeconds: seconds))
+        Diag.log("Apro \(isLive ? "il canale" : "il video") «\(title)» con \(engineName): \(Net.brief(url.absoluteString))")
         refreshTracks()
     }
 
@@ -229,12 +236,11 @@ public final class PlayerModel: ObservableObject {
         isLive = true
         baseKey = base ?? key
         currentKey = baseKey
-        if base == nil { forceVLC = false }                       // a new channel gets the preferred engine again
+        if base == nil { forceVLC = false; forceAV = false }      // a new channel gets the preferred engine again
         generation += 1
         let gen = generation
         retryTask?.cancel()
         attempts = 0
-        usedAlt = false
         notice = nil
         let shown = app.backend.item(baseKey) ?? it
         title = app.backend.channelName(baseKey)
@@ -257,7 +263,9 @@ public final class PlayerModel: ObservableObject {
             if gen != self.generation { return }
             self.play = p
             self.playingKey = chosen.key
-            self.load(p, at: 0)
+            self.playingSrc = chosen.src
+            self.urlIndex = min(PlayerModel.workingForm[chosen.src] ?? 0, p.alts.count)
+            self.load(p, url: self.currentURL(p), at: 0)
             self.updateQualities(chosen)
             self.refreshGuide()
             self.updateNowPlaying()
@@ -347,6 +355,7 @@ public final class PlayerModel: ObservableObject {
         guard let it = app.backend.item(key) else { phase = .failed("Titolo non trovato"); return }
         isLive = false
         forceVLC = false
+        forceAV = false
         vodKey = key
         currentKey = key
         title = Backend.cleanTitle(it.name)
@@ -370,6 +379,7 @@ public final class PlayerModel: ObservableObject {
         guard let sk = seriesKey else { return }
         isLive = false
         forceVLC = false
+        forceAV = false
         episode = ep
         vodKey = ep.rk
         currentKey = ep.rk
@@ -486,26 +496,35 @@ public final class PlayerModel: ObservableObject {
     }
 
     private func failed(_ msg: String) {
+        Diag.log("\(engineName) non riproduce «\(title)»: \(msg)")
         guard let p = play else { phase = .failed(msg); return }
         attempts += 1
         playingSince = nil
         if isLive {
-            // the same entry again, sooner at first; after repeated failures the other live format; VLC for what AVPlayer cannot read
-            if engineId == "av" && Engines.vlcAvailable && (attempts == 1 || Engines.needsVLC(URL(string: p.url) ?? URL(fileURLWithPath: "/"), live: true)) { forceVLC = true }
-            if attempts > 6 { phase = .failed(msg); notice = nil; return }
-            let url = URL(string: p.url)
-            let cannotPlay = !Engines.vlcAvailable && (url.map { Engines.needsVLC($0, live: true) } ?? false)          // AVPlayer cannot read this stream at all
-            if (attempts >= 3 || cannotPlay), !usedAlt, let alt = p.alt {
-                usedAlt = true
-                notice = "Provo l'altro formato del canale…"
-                reload(after: 0.8, url: alt)
-                return
+            // Each form of the address with one player, then with the other; then the next form (other format, old style address).
+            // Providers differ: whatever plays first wins, and is remembered for the other channels of the same list.
+            if attempts > 2 * (p.alts.count + 1) + 1 { phase = .failed(msg); notice = nil; return }
+            let cur = URL(string: currentURL(p))
+            let needsVLC = cur.map { Engines.needsVLC($0, live: true) } ?? false
+            let canToggle = Engines.vlcAvailable && app.setting("engine", "auto") == "auto" && (engineId == "av" || !needsVLC)
+            if attempts % 2 == 1 && canToggle {
+                if engineId == "av" { forceVLC = true; forceAV = false } else { forceAV = true; forceVLC = false }
+                notice = "Riconnessione… (\(attempts))"
+                reload(after: 0.8, url: currentURL(p))
+            } else if !p.alts.isEmpty {
+                forceVLC = false; forceAV = false
+                urlIndex = (urlIndex + 1) % (p.alts.count + 1)
+                notice = "Provo un altro formato del canale…"
+                reload(after: 0.6, url: currentURL(p))
+            } else {
+                notice = "Riconnessione… (\(attempts))"
+                reload(after: min(5, Double(attempts) * 1.5), url: currentURL(p))
             }
-            notice = "Riconnessione… (\(attempts))"
-            reload(after: min(6, Double(attempts) * 1.5), url: nil)
         } else {
             if attempts > 3 { phase = .failed(msg); notice = nil; return }
-            if engineId == "av" && Engines.vlcAvailable { forceVLC = true }
+            if Engines.vlcAvailable {
+                if engineId == "av" { forceVLC = true; forceAV = false } else if attempts == 2 { forceAV = true; forceVLC = false }
+            }
             notice = "Riprovo da dove eri arrivato…"
             reload(after: Double(attempts), url: nil)
         }
@@ -523,10 +542,13 @@ public final class PlayerModel: ObservableObject {
 
     public func retry() {
         attempts = 0
-        usedAlt = false
         guard let p = play else { return }
         notice = nil
-        load(p, at: isLive ? 0 : max(positionMs, startAt))
+        load(p, url: currentURL(p), at: isLive ? 0 : max(positionMs, startAt))
+    }
+
+    private func currentURL(_ p: Play) -> String {
+        urlIndex == 0 || urlIndex > p.alts.count ? p.url : p.alts[urlIndex - 1]
     }
 
     private func tick() {
@@ -553,15 +575,21 @@ public final class PlayerModel: ObservableObject {
         if dur != durationMs { durationMs = dur }
         if phase == .playing { saveResume(force: false); updateNowPlayingTime() }
         // a stream that stays on "buffering" is as good as dead: start the reconnect path
-        if let s = stallSince, phase == .buffering {
-            let limit: TimeInterval = isLive ? 15 : 45
+        if let s = stallSince, phase == .buffering || phase == .loading {
+            let limit: TimeInterval = isLive ? 18 : 45
             if Date().timeIntervalSince(s) > limit {
                 stallSince = nil
                 failed("Il flusso non risponde")
             }
         }
         // a connection that held for a while earns a fresh start for the retry counter
-        if let ps = playingSince, Date().timeIntervalSince(ps) > 12 { attempts = 0; usedAlt = false }
+        if let ps = playingSince, Date().timeIntervalSince(ps) > 8 {
+            attempts = 0
+            if isLive && playingSrc >= 0 && PlayerModel.workingForm[playingSrc] != urlIndex {
+                PlayerModel.workingForm[playingSrc] = urlIndex
+                Diag.log("Questa lista funziona con l'indirizzo n. \(urlIndex + 1) del canale (\(engineName))")
+            }
+        }
     }
 
     // MARK: controls

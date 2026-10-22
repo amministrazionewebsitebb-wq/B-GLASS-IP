@@ -17,6 +17,25 @@ public enum NetError: Error, LocalizedError {
 public enum Net {
     public static let defaultUA = "VLC/3.0.20 LibVLC/3.0.20"
 
+    /// What IPTV apps call themselves. Some panels and list hosts only answer the players they know: when the first one is
+    /// refused, the others are tried in turn (the one that works is then remembered on the list).
+    public static let userAgents = [
+        defaultUA,
+        "IPTVSmartersPlayer",
+        "okhttp/4.12.0",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1",
+        "Lavf/60.16.100",
+    ]
+
+    /// Short form of an address for the technical log: host and path, never the query.
+    public static func brief(_ url: String) -> String {
+        guard let u = URLComponents(string: url), let host = u.host else { return String(url.prefix(60)) }
+        let port = u.port.map { ":\($0)" } ?? ""
+        var path = u.path
+        if path.count > 48 { path = String(path.prefix(48)) + "…" }
+        return "\(u.scheme ?? "http")://\(host)\(port)\(path)"
+    }
+
     private final class TrustAll: NSObject, URLSessionDelegate {
         func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
                         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
@@ -53,19 +72,26 @@ public enum Net {
         return secureSession!
     }
 
-    public static func request(_ url: String, ua: String) throws -> URLRequest {
+    public static func request(_ url: String, ua: String, timeout: TimeInterval? = nil) throws -> URLRequest {
         guard let u = URL(string: url) ?? URL(string: url.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed.union(CharacterSet(charactersIn: "#%")) ) ?? ""),
               u.scheme != nil else { throw NetError.invalid("Indirizzo non valido") }
         var r = URLRequest(url: u)
+        if let t = timeout { r.timeoutInterval = t }
         r.setValue(ua.isEmpty ? defaultUA : ua, forHTTPHeaderField: "User-Agent")
         r.setValue("*/*", forHTTPHeaderField: "Accept")
         return r
     }
 
     /// A small payload (JSON of an API call). Un-gzipped when it is a raw gzip body.
-    public static func data(_ url: String, ua: String = "", insecure: Bool = false) async throws -> Data {
-        let (d, resp) = try await session(insecure: insecure).data(for: try request(url, ua: ua))
-        if let h = resp as? HTTPURLResponse, !(200...299).contains(h.statusCode) { throw NetError.http(h.statusCode) }
+    public static func data(_ url: String, ua: String = "", insecure: Bool = false, timeout: TimeInterval? = nil) async throws -> Data {
+        let d: Data, resp: URLResponse
+        do { (d, resp) = try await session(insecure: insecure).data(for: try request(url, ua: ua, timeout: timeout)) }
+        catch { Diag.log("GET \(brief(url)) → \(explain(error))"); throw error }
+        if let h = resp as? HTTPURLResponse, !(200...299).contains(h.statusCode) {
+            Diag.log("GET \(brief(url)) → HTTP \(h.statusCode) [UA \(ua.isEmpty ? defaultUA : ua)]")
+            throw NetError.http(h.statusCode)
+        }
+        if !url.contains("action=get_short_epg") { Diag.log("GET \(brief(url)) → \(d.count) byte") }     // one per channel: too many to log
         if Gzip.isGzip(d) { return try Gzip.inflate(d) }
         return d
     }
@@ -91,7 +117,11 @@ public enum Net {
     public static func download(_ url: String, ua: String = "", insecure: Bool = false, progress: ((Int64, Int64) -> Void)? = nil) async throws -> URL {
         let req = try request(url, ua: ua)
         let job = DownloadJob(insecure: insecure, progress: progress)
-        let raw = try await job.run(req)
+        let raw: URL
+        do { raw = try await job.run(req) }
+        catch { Diag.log("Scarico \(brief(url)) → \(explain(error)) [UA \(ua.isEmpty ? defaultUA : ua)]"); throw error }
+        let size = (try? FileManager.default.attributesOfItem(atPath: raw.path)[.size] as? Int) ?? 0
+        Diag.log("Scarico \(brief(url)) → \(size) byte")
         if Gzip.fileIsGzip(raw) {
             defer { try? FileManager.default.removeItem(at: raw) }
             let out = FileManager.default.temporaryDirectory.appendingPathComponent("bglass-\(UUID().uuidString).dat")
@@ -107,8 +137,11 @@ public enum Net {
         if let n = error as? NetError {
             switch n {
             case .http(let c):
-                if c == 401 || c == 403 { return "Accesso negato dal server (HTTP \(c)). Controlla utente, password o User-Agent." }
-                if c == 404 { return "Indirizzo non trovato (404). Controlla il link." }
+                if c == 401 || c == 403 { return "Accesso negato dal server (HTTP \(c)). Controlla utente e password, o se l'abbonamento è attivo." }
+                if c == 404 { return "Indirizzo non trovato (404). Controlla il link o il server." }
+                if c == 407 { return "Serve un proxy per collegarsi (HTTP 407)." }
+                if c == 429 { return "Il server riceve troppe richieste (HTTP 429). Riprova tra qualche minuto." }
+                if c == 458 || c == 459 || c == 460 { return "Il fornitore blocca questa connessione (HTTP \(c)): troppi dispositivi collegati o linea non consentita." }
                 if c >= 500 { return "Il server ha un problema (HTTP \(c)). Riprova più tardi." }
                 return "Errore del server (HTTP \(c))."
             case .invalid(let m): return m
@@ -116,7 +149,7 @@ public enum Net {
         }
         if let u = error as? URLError {
             switch u.code {
-            case .cannotFindHost, .dnsLookupFailed: return "Server non trovato. Controlla l'indirizzo e la connessione a Internet."
+            case .cannotFindHost, .dnsLookupFailed: return "Server non trovato. Controlla l'indirizzo; alcuni operatori bloccano i server IPTV: prova con un'altra rete o un DNS diverso."
             case .timedOut: return "Il server non risponde (tempo scaduto). Riprova tra poco."
             case .cannotConnectToHost, .networkConnectionLost: return "Impossibile connettersi al server. Controlla indirizzo e porta."
             case .notConnectedToInternet: return "Nessuna connessione a Internet."

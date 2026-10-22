@@ -251,8 +251,9 @@ public enum XMLTV {
         var se = 0
         if u.count >= 14, isDigitScalar(u[12]) { se = num(12, 14) ?? 0 }
         var t = daysFromCivil(y, mo, d) * 86400 + Int64(h) * 3600 + Int64(mi) * 60 + Int64(se)
-        if let sp = u.firstIndex(of: " ") {
-            let tz = String(String.UnicodeScalarView(u[(sp + 1)...])).trimmed
+        // the offset may follow a space ("… +0200") or come straight after the digits ("…+0200", "…Z" for UTC)
+        if let sp = u.indices.first(where: { $0 >= 12 && (u[$0] == " " || u[$0] == "+" || u[$0] == "-") }) {
+            let tz = String(String.UnicodeScalarView(u[(u[sp] == " " ? sp + 1 : sp)...])).trimmed.replacingOccurrences(of: ":", with: "")
             let t2 = Array(tz.unicodeScalars)
             if t2.count >= 5, t2[0] == "+" || t2[0] == "-",
                let oh = Int(String(String.UnicodeScalarView(t2[1..<3]))), let om = Int(String(String.UnicodeScalarView(t2[3..<5]))) {

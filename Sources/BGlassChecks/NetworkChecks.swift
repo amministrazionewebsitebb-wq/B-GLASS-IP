@@ -168,12 +168,12 @@ func runNetworkChecks(_ h: Harness) async {
         h.check(a.expTs == 1893456000 && a.expires.hasSuffix("/2030"))
         let bad = try await XtreamClient(xtreamSource(server.base, pass: "wrong")).auth()
         h.check(!bad.ok)
-        h.equal(bad.message, "Disabled")
+        h.equal(bad.message, "Account disattivato dal fornitore")
         let msg = try await b.test(xtreamSource(server.base))
         h.check(msg.contains("Account active") || msg.contains("attivo") || msg.contains("active"), msg)
         var thrown = ""
         do { _ = try await b.test(xtreamSource(server.base, pass: "wrong")) } catch { thrown = Net.explain(error) }
-        h.equal(thrown, "Disabled")
+        h.equal(thrown, "Account disattivato dal fornitore")
     }
 
     await h.suite("xtream refresh, library, profile, rows, search") {
@@ -301,14 +301,14 @@ func runNetworkChecks(_ h: Harness) async {
         let s = b.lib.addSource(xtreamSource(server.base, pass: "wrong"))
         var msg = ""
         do { try await b.refreshSource(s.id) } catch { msg = Net.explain(error) }
-        h.equal(msg, "Disabled")
+        h.equal(msg, "Account disattivato dal fornitore")
         var s2 = Source()
         s2.name = "Rotta"; s2.type = .m3u; s2.url = server.base + "/list404.m3u"
         let bad = b.lib.addSource(s2)
         var err: Error?
         do { try await b.refreshSource(bad.id) } catch { err = error }
         if case NetError.http(let c)? = err { h.equal(c, 404) } else { h.check(false, "expected HTTP 404, got \(String(describing: err))") }
-        h.equal(Net.explain(err ?? NetError.http(0)), "Indirizzo non trovato (404). Controlla il link.")
+        h.equal(Net.explain(err ?? NetError.http(0)), "Indirizzo non trovato (404). Controlla il link o il server.")
         let missing = server.requestLog.filter { $0.hasPrefix("/list404.m3u") }.count
         h.equal(missing, 1, "a 404 is not retried")
         var s3 = Source()

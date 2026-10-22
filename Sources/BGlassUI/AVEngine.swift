@@ -94,7 +94,9 @@ public final class AVEngine: NSObject, PlayerEngine {
         ended = false
         audioGroup = nil
         subGroup = nil
-        let asset = AVURLAsset(url: r.url, options: ["AVURLAssetHTTPHeaderFieldsKey": ["User-Agent": r.userAgent]])
+        var headers = r.headers
+        headers["User-Agent"] = r.userAgent
+        let asset = AVURLAsset(url: r.url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
         let it = AVPlayerItem(asset: asset)
         it.preferredForwardBufferDuration = r.bufferSeconds
         it.canUseNetworkResourcesForLiveStreamingWhilePaused = false

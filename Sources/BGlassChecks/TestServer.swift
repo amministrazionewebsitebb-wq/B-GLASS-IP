@@ -13,12 +13,17 @@ final class TestServer {
 
     private let listener: NWListener
     private let queue = DispatchQueue(label: "testserver")
-    private let handler: (_ path: String, _ query: [String: String]) -> Response
+    private let handler: (_ path: String, _ query: [String: String], _ headers: [String: String]) -> Response
     private(set) var requests: [String] = []
     private let lock = NSLock()
     private(set) var port: UInt16 = 0
 
-    init(handler: @escaping (_ path: String, _ query: [String: String]) -> Response) throws {
+    convenience init(handler: @escaping (_ path: String, _ query: [String: String]) -> Response) throws {
+        try self.init(withHeaders: { p, q, _ in handler(p, q) })
+    }
+
+    /// `headers`: the request headers, names in lower case.
+    init(withHeaders handler: @escaping (_ path: String, _ query: [String: String], _ headers: [String: String]) -> Response) throws {
         self.handler = handler
         listener = try NWListener(using: .tcp, on: .any)
         let ready = DispatchSemaphore(value: 0)
@@ -68,7 +73,12 @@ final class TestServer {
                 query[String(p[0])] = p.count > 1 ? (String(p[1]).replacingOccurrences(of: "+", with: " ").removingPercentEncoding ?? String(p[1])) : ""
             }
         }
-        let r = handler(path, query)
+        var headers: [String: String] = [:]
+        for l in head.split(separator: "\r\n").dropFirst() {
+            guard let c = l.firstIndex(of: ":") else { continue }
+            headers[l[l.startIndex..<c].lowercased()] = String(l[l.index(after: c)...]).trimmingCharacters(in: .whitespaces)
+        }
+        let r = handler(path, query, headers)
         var out = "HTTP/1.1 \(r.status) \(r.status == 200 ? "OK" : "ERR")\r\nContent-Length: \(r.body.count)\r\nConnection: close\r\n"
         for (k, v) in r.headers { out += "\(k): \(v)\r\n" }
         out += "\r\n"

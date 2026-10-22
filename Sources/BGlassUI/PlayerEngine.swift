@@ -16,12 +16,14 @@ public struct TrackInfo: Identifiable, Equatable {
 public struct EngineRequest {
     public var url: URL
     public var userAgent: String
+    /// Other request headers the list asks for (Referer, Origin, Cookie).
+    public var headers: [String: String]
     public var live: Bool
     public var startAtMs: Int64
     /// How much to read ahead, in seconds (live streams want little, films a lot).
     public var bufferSeconds: Double
-    public init(url: URL, userAgent: String, live: Bool, startAtMs: Int64, bufferSeconds: Double) {
-        self.url = url; self.userAgent = userAgent; self.live = live; self.startAtMs = startAtMs; self.bufferSeconds = bufferSeconds
+    public init(url: URL, userAgent: String, headers: [String: String] = [:], live: Bool, startAtMs: Int64, bufferSeconds: Double) {
+        self.url = url; self.userAgent = userAgent; self.headers = headers; self.live = live; self.startAtMs = startAtMs; self.bufferSeconds = bufferSeconds
     }
 }
 
@@ -72,7 +74,10 @@ public enum Engines {
     public static func needsVLC(_ url: URL, live: Bool) -> Bool {
         let ext = url.pathExtension.lowercased()
         if ["mkv", "avi", "wmv", "flv", "webm", "mpg", "mpeg", "rmvb", "divx", "vob"].contains(ext) { return true }
-        if live && (ext == "ts" || ext.isEmpty && !url.absoluteString.contains(".m3u8")) { return true }
+        if ["ts", "mts", "m2ts", "flv"].contains(ext) { return true }
+        let s = url.absoluteString.lowercased()
+        if s.hasPrefix("rtmp") || s.hasPrefix("rtsp") || s.hasPrefix("udp") || s.hasPrefix("rtp") || s.hasPrefix("mms") { return true }
+        if live && ext.isEmpty && !s.contains(".m3u8") && !s.contains("m3u8") { return true }
         return false
     }
 }

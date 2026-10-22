@@ -7,7 +7,7 @@ ripensate per il tocco. Legge **liste M3U/M3U8** e **account Xtream Codes**; ogn
 > che parte dai sorgenti di B-Glass: la logica (parser, Xtream, pacchetti di canali, riconoscimento delle qualità, righe per genere, guida TV, profili) è stata
 > portata riga per riga e verificata con gli stessi test dell'originale; l'interfaccia e il player sono nuovi e nativi.
 
-## Cosa c'è dentro (1.1)
+## Cosa c'è dentro
 
 Pensata per il telefono: quattro schede, poche funzioni ma fatte bene, grafica scura in stile piattaforma di streaming.
 
@@ -20,6 +20,19 @@ Pensata per il telefono: quattro schede, poche funzioni ma fatte bene, grafica s
 | **Player** | **in verticale**: video in alto, sotto il programma in onda e l'elenco dei canali (un tocco cambia canale); **in orizzontale**: schermo intero con una striscia di canali e i tasti canale precedente/successivo. Film ed episodi partono a schermo intero. Picture in Picture, AirPlay, audio in background, comandi in blocco schermo, audio e sottotitoli, qualità del canale, riconnessione automatica, prossimo episodio |
 | **VLC** | secondo lettore per ciò che Apple non riproduce (**MKV, AVI, MPEG-TS grezzo**): con *Lettore: Automatico* entra in gioco da solo |
 | **Impostazioni** | liste e abbonamento, profili (con PIN e profilo bambini), guida TV, lingua audio e sottotitoli, lettore, stabilità, contenuti per adulti con PIN, test della connessione |
+
+### Compatibilità con i fornitori (1.2)
+
+Ogni fornitore fa le cose a modo suo; B·Glass si adatta da solo, senza chiedere nulla:
+
+- **Riconoscimento dell'app (User-Agent)**: se il pannello o il sito della lista rifiuta l'app, prova da sola i nomi dei lettori più diffusi (VLC, IPTV Smarters, okhttp, Safari, ffmpeg) e ricorda quello accettato.
+- **Indirizzo del pannello**: se il server non risponde come scritto, prova l'altro protocollo (http/https) e le porte usate dai pannelli Xtream (8080, 80, 25461, 8000, 8880, 2082, 2095, 8443, 443). Accetta i certificati HTTPS scaduti o fatti in casa quando sono l'unico problema.
+- **Risposte "sporche"**: avvisi PHP prima dei dati, nomi scritti in Latin-1 invece di UTF-8, cataloghi vuoti indicati con `null`, categorie mancanti; un elenco vuoto mandato per errore non cancella i canali che c'erano.
+- **Liste M3U scritte in modi diversi**: intestazioni in stile Kodi (`indirizzo|User-Agent=…&Referer=…`), `#EXTVLCOPT` prima o dopo `#EXTINF`, attributi tra apici, righe di testo estranee, più guide nell'intestazione, un link che è un solo canale HLS.
+- **Canali**: ogni canale viene provato in tutte le sue forme (HLS, MPEG-TS, indirizzo senza formato) con entrambi i lettori (Apple e VLC); la forma che funziona viene ricordata per gli altri canali della stessa lista. Un canale che resta bloccato sul caricamento viene riavviato da solo.
+- **Errori chiari**: la lista viene controllata prima di essere aggiunta; se non va, l'app dice perché (password, abbonamento scaduto, pagina web al posto della lista, server irraggiungibile…). In *Impostazioni › Registro tecnico* c'è il registro di cosa è stato chiesto ai server e cosa hanno risposto (utenti e password nascosti), da copiare e inviare.
+
+Non sono supportati i portali **Stalker / MAG** (accesso con indirizzo MAC): servono liste M3U o account Xtream Codes.
 
 Non c'è più nulla da configurare dopo aver aggiunto la lista: tutto il catalogo è subito visibile (i contenuti per adulti restano nascosti).
 
@@ -50,7 +63,7 @@ Oppure `xcodegen generate` e apri `BGlass.xcodeproj` in Xcode: scegli il tuo tea
 
 **Verificato su questo Mac**
 - Il *core* (`BGlassCore`: parser M3U e Xtream, JSON a flusso, gzip, XMLTV, guida, libreria su disco, profili, pacchetti, qualità, generi, righe, ricerca, speed test) con
-  **1.324 controlli** (`scripts/check.sh`): i test JUnit dell'app Android su parser, libreria, generi, pacchetti di canali e qualità portati in Swift (compreso il riconoscimento dei canali in 8 stili di nomi internazionali: 286/286)
+  **1.377 controlli** (`scripts/check.sh`): i test JUnit dell'app Android su parser, libreria, generi, pacchetti di canali e qualità portati in Swift (compreso il riconoscimento dei canali in 8 stili di nomi internazionali: 286/286)
   più un **server HTTP finto** che si comporta da pannello Xtream (account, cataloghi, EPG gzip, M3U e M3U.gz, errori di credenziali, 404, riavvio dell'app)
   e una prova di **scala** con 106.000 titoli (2.000 canali, 98.000 film, 6.000 serie), anche in build non ottimizzata: canali pronti in ~20 ms, caricamento completo ~1,2 s,
   prime righe dei film ~0,7 s, ricerca ~0,3 s.
@@ -93,7 +106,7 @@ scripts/                 check.sh, typecheck.sh, preview.sh, build_ipa.sh, make_
 ### Strumenti di sviluppo (bastano le Command Line Tools)
 
 ```bash
-scripts/check.sh                       # compila il core ed esegue i 1.324 controlli
+scripts/check.sh                       # compila il core ed esegue i 1.377 controlli
 scripts/typecheck.sh                   # type-check di core + UI contro iOS (Catalyst) e macOS
 scripts/preview.sh /tmp/shots home live guide detail_movie   # PNG delle schermate con dati finti
 ```

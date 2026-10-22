@@ -33,11 +33,17 @@ final class VLCEngine: NSObject, PlayerEngine, VLCMediaPlayerDelegate {
         startAtMs = r.startAtMs
         pendingSeek = r.startAtMs > 0
         let media = VLCMedia(url: r.url)
-        media.addOptions([
+        // VLC waits for this much before showing the picture: a little for channels (fast zapping), more for films
+        let caching: Int
+        if r.live { caching = r.bufferSeconds <= 3 ? 1000 : (r.bufferSeconds >= 30 ? 5000 : 2500) }
+        else { caching = r.bufferSeconds <= 15 ? 1500 : (r.bufferSeconds >= 90 ? 8000 : 3500) }
+        var opts: [AnyHashable: Any] = [
             "http-user-agent": r.userAgent,
-            "network-caching": Int(r.bufferSeconds * 1000),
+            "network-caching": caching,
             "http-reconnect": "1",
-        ])
+        ]
+        if let ref = r.headers["Referer"] { opts["http-referrer"] = ref }
+        media.addOptions(opts)
         player.media = media
         set(.loading)
         player.play()
